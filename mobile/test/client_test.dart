@@ -320,7 +320,15 @@ void main() {
       expect(c.snapshot, isEmpty);
       final requestCount = server.requests.length;
       await c.refresh();
-      expect(server.requests.length, requestCount);
+      // Safe housekeeping may finish while the organization cache is blocked.
+      // No new scoped business data may be fetched before restore completes.
+      final unexpected = server.requests.skip(requestCount).map(
+        (request) => request.url.path.replaceFirst('/api/', ''),
+      ).where((route) => !{'updates/', 'mobile/push/'}.contains(route)).toList();
+      expect(
+        unexpected, isEmpty,
+        reason: 'Organization data must not be fetched before scoped restore',
+      );
       // An app pause during loading must not replace an unread draft with {}.
       await c.flushDrafts();
       expect(
