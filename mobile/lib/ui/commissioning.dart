@@ -79,8 +79,10 @@ class _CommissioningPageState extends State<CommissioningPage> {
 
   Future<void> _post(String path, Json body) async {
     if (!c.canWrite || _busy) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Для изменения нужна связь с сервером.')));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Для изменения нужна связь с сервером.')));
+      }
       return;
     }
     setState(() { _busy = true; _error = ''; });
@@ -213,8 +215,10 @@ class _CommissioningPageState extends State<CommissioningPage> {
       )),
     );
     note.dispose();
-    if (result != null) await _post(
+    if (result != null) {
+      await _post(
         'commissioning/${_detail!['id']}/lifts/${lift['id']}/progress/', result);
+    }
   }
 
   Future<void> _addExpense() async {

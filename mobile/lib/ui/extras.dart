@@ -5,7 +5,6 @@ import 'package:image_picker/image_picker.dart';
 import 'package:flutter/services.dart';
 import '../core/api.dart';
 import '../core/controller.dart';
-import '../core/diagnostics.dart';
 import '../core/device_bridge.dart';
 import 'common.dart';
 import 'journal.dart';
@@ -384,7 +383,7 @@ class _PartFormState extends State<PartForm> {
       await widget.controller.refresh();
       if (mounted) Navigator.pop(context);
     } catch (e) {
-      if (context.mounted) showError(context, e);
+      if (mounted) showError(context, e);
     } finally {
       if (mounted) setState(() => _busy = false);
     }
