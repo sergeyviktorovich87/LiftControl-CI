@@ -226,6 +226,13 @@ class TicketViewSet(TenantViewSet):
         self.get_object()
         return Response(self.get_serializer(resume_ticket(request.user, pk)).data)
 
+    @action(detail=True, methods=['post'], url_path='long-repair')
+    def long_repair(self, request, pk=None):
+        from .ticket_flow import defer_repair
+        self.get_object()
+        ticket = defer_repair(request.user, pk, request.data.get('reason'), request.data.get('expected_date'))
+        return Response(self.get_serializer(ticket).data)
+
     @action(detail=True, methods=['post'])
     def cancel(self, request, pk=None):
         from .ticket_flow import cancel_ticket

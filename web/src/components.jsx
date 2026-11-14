@@ -1,7 +1,7 @@
 import React,{useEffect,useId,useRef,useState} from 'react';
 import {X,Plus,Trash2,ImagePlus} from 'lucide-react';
 import {api,PREVIEW} from './api';
-export const statusNames={NEW:'Новая',ASSIGNED:'Назначена',IN_PROGRESS:'В работе',STOPPED:'Лифт остановлен',DONE:'Выполнена',CANCELED:'Отменена',APPROVED:'Согласована',ORDERED:'Заказана',RECEIVED:'Получена',ISSUED:'Выдана'};
+export const statusNames={NEW:'Новая',ASSIGNED:'Назначена',IN_PROGRESS:'В работе',STOPPED:'Лифт остановлен',LONG_REPAIR:'Длительный ремонт',DONE:'Выполнена',CANCELED:'Отменена',APPROVED:'Согласована',ORDERED:'Заказана',RECEIVED:'Получена',ISSUED:'Выдана'};
 export function Badge({value,children}){return <span className={'badge '+(value||'')}>{children||statusNames[value]||value}</span>;}
 export function Field({label,children,...props}){
  const labelId=useId(),control=children||<input {...props}/>;

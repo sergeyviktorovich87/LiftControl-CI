@@ -435,6 +435,16 @@ class _TicketPageState extends State<TicketPage> {
     });
   }
 
+  Future<void> _deferRepair() async {
+    final result = await showDialog<Json>(
+      context: context,
+      builder: (_) => _LongRepairDialog(today: c.orgNow),
+    );
+    if (result != null && mounted) {
+      await _run(() => _transition('long-repair', result));
+    }
+  }
+
   @override
   Widget build(BuildContext context) => ScopePage(
     controller: c,
@@ -485,14 +495,19 @@ class _TicketPageState extends State<TicketPage> {
             IconButton(
               tooltip: 'Обсудить заявку в чате',
               icon: const Icon(Icons.chat_bubble_outline),
-              onPressed: _ticketId <= 0 ? null : () => Navigator.push(
-                context,
-                MaterialPageRoute<void>(
-                  builder: (_) => ChatPage(
-                    controller: c, quoteKind: 'ticket',
-                    quoteId: _ticketId, quoteTitle: text(t, 'title')),
-                ),
-              ),
+              onPressed: _ticketId <= 0
+                  ? null
+                  : () => Navigator.push(
+                      context,
+                      MaterialPageRoute<void>(
+                        builder: (_) => ChatPage(
+                          controller: c,
+                          quoteKind: 'ticket',
+                          quoteId: _ticketId,
+                          quoteTitle: text(t, 'title'),
+                        ),
+                      ),
+                    ),
             ),
             IconButton(
               tooltip: 'Вложения заявки',
@@ -591,6 +606,13 @@ class _TicketPageState extends State<TicketPage> {
                             Text(
                               'Причина остановки: ${text(t, 'stop_reason')}',
                             ),
+                          if (t['status'] == 'LONG_REPAIR') ...[
+                            Text(text(t, 'long_repair_reason')),
+                            if (t['expected_repair_date'] != null)
+                              Text(
+                                'Ожидаемая дата · ${dateLabel(t['expected_repair_date'], 0, time: false)}',
+                              ),
+                          ],
                           if (text(t, 'description', '').isNotEmpty) ...[
                             const Divider(),
                             SelectableText(text(t, 'description')),
@@ -665,6 +687,13 @@ class _TicketPageState extends State<TicketPage> {
                         label: const Text('Продолжить ремонт'),
                       ),
                     if (t['can_complete'] == true) ...[
+                      OutlinedButton.icon(
+                        onPressed: c.canRecord && _ticketId > 0 && !_busy
+                            ? _deferRepair
+                            : null,
+                        icon: const Icon(Icons.schedule),
+                        label: const Text('Длительный ремонт'),
+                      ),
                       FilledButton.icon(
                         onPressed: c.canRecord && _ticketId > 0 && !_busy
                             ? _complete
@@ -831,12 +860,93 @@ String _eventName(String name) =>
       'COMPLETED': 'Работа выполнена',
       'STOPPED': 'Лифт остановлен',
       'RESUMED': 'Ремонт продолжен',
+      'LONG_REPAIR': 'Длительный ремонт',
       'CANCELED': 'Заявка отменена',
       'REASSIGNED': 'Изменён исполнитель',
       'COMMENTED': 'Добавлен комментарий',
       'PHOTO_ADDED': 'Добавлено фото',
     }[name.toUpperCase()] ??
     name;
+
+class _LongRepairDialog extends StatefulWidget {
+  const _LongRepairDialog({required this.today});
+  final DateTime today;
+
+  @override
+  State<_LongRepairDialog> createState() => _LongRepairDialogState();
+}
+
+class _LongRepairDialogState extends State<_LongRepairDialog> {
+  final _reason = TextEditingController();
+  DateTime? _date;
+
+  @override
+  void dispose() {
+    _reason.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    title: const Text('Длительный ремонт'),
+    content: SingleChildScrollView(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          TextField(
+            controller: _reason,
+            maxLength: 1000,
+            maxLines: 3,
+            decoration: const InputDecoration(labelText: 'Причина'),
+            onChanged: (_) => setState(() {}),
+          ),
+          TextButton.icon(
+            icon: const Icon(Icons.event_outlined),
+            label: Text(
+              _date == null
+                  ? 'Ожидаемая дата (необязательно)'
+                  : dateLabel(
+                      _date!.toIso8601String().substring(0, 10),
+                      0,
+                      time: false,
+                    ),
+            ),
+            onPressed: () async {
+              final selected = await showDatePicker(
+                context: context,
+                initialDate: _date ?? widget.today,
+                firstDate: widget.today,
+                lastDate: DateTime(widget.today.year + 5, 12, 31),
+              );
+              if (selected != null && mounted) setState(() => _date = selected);
+            },
+          ),
+          if (_date != null)
+            TextButton(
+              onPressed: () => setState(() => _date = null),
+              child: const Text('Убрать дату'),
+            ),
+        ],
+      ),
+    ),
+    actions: [
+      TextButton(
+        onPressed: () => Navigator.pop(context),
+        child: const Text('Отмена'),
+      ),
+      FilledButton(
+        onPressed: _reason.text.trim().length < 5
+            ? null
+            : () => Navigator.pop(context, {
+                'reason': _reason.text.trim(),
+                if (_date != null)
+                  'expected_date': _date!.toIso8601String().substring(0, 10),
+              }),
+        child: const Text('Сохранить'),
+      ),
+    ],
+  );
+}
 
 class _LocalPhoto extends StatelessWidget {
   const _LocalPhoto({required this.encoded});

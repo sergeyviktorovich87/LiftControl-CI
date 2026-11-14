@@ -5,13 +5,14 @@ import {api,download,PREVIEW} from './api';
 import {Dialog,Field} from './components';
 import {prepareImages} from './imageCompression';
 
-export default function ChatMedia({user,data,initialReference,onReferenceChange,onOpenReference}){
+export default function ChatMedia({user,data,initialReference,onReferenceChange,onOpenReference,initialMessage,onMessageOpened}){
  const [messages,setMessages]=useState([]),[body,setBody]=useState(''),[reference,setReference]=useState(initialReference||null),[files,setFiles]=useState([]),[busy,setBusy]=useState(false),[error,setError]=useState(''),[exporting,setExporting]=useState(false),[showMedia,setShowMedia]=useState(false);
- const end=useRef(),input=useRef();
+ const end=useRef(),input=useRef(),messageId=useRef(initialMessage);
  const changeReference=value=>{setReference(value);onReferenceChange?.(value);};
- const refresh=useCallback(async()=>{try{let rows=await api('chat/');const selected=new URLSearchParams(location.search).get('message');if(/^[1-9][0-9]*$/.test(selected||'')&&!rows.some(r=>r.id===Number(selected))){rows=[await api('chat/'+selected+'/'),...rows];}setMessages(rows);}catch(e){setError(e.message);}},[]);
+ const refresh=useCallback(async()=>{try{let rows=await api('chat/');const selected=messageId.current||new URLSearchParams(location.search).get('message');if(/^[1-9][0-9]*$/.test(selected||'')&&!rows.some(r=>r.id===Number(selected))){rows=[await api('chat/'+selected+'/'),...rows];}setMessages(rows);}catch(e){setError(e.message);}},[]);
+ useEffect(()=>{if(initialMessage)onMessageOpened?.();},[]);
  useEffect(()=>{refresh();const timer=setInterval(()=>{if(!document.hidden)refresh();},5000);return()=>clearInterval(timer);},[refresh]);
- useEffect(()=>{const selected=new URLSearchParams(location.search).get('message');if(selected){document.getElementById('chat-message-'+selected)?.scrollIntoView({block:'center'});}else end.current?.scrollIntoView({block:'nearest'});},[messages.length]);
+ useEffect(()=>{const selected=messageId.current||new URLSearchParams(location.search).get('message');if(selected){document.getElementById('chat-message-'+selected)?.scrollIntoView({block:'center'});}else end.current?.scrollIntoView({block:'nearest'});},[messages.length]);
  const choose=async e=>{const selected=[...e.target.files];e.target.value='';if(selected.length>5){setError('До 5 вложений на сообщение.');return;}
   setBusy(true);setError('');try{const next=await prepareImages(selected);if(next.reduce((n,f)=>n+f.size,0)>20*1024*1024||next.some(f=>f.type.startsWith('image/')&&f.size>10*1024*1024))throw Error('До 20 МБ на сообщение; фото до 10 МБ после сжатия.');setFiles(next);}catch(e){setError(e.message);}finally{setBusy(false);}};
  const send=async e=>{e.preventDefault();if(busy||!body.trim()&&!files.length&&!reference)return;setBusy(true);setError('');try{

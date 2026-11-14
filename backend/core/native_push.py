@@ -20,7 +20,8 @@ from .models import MobileSession, NativePushDevice, NativePushDelivery, Members
 logger = logging.getLogger('liftcontrol.push')
 _credential_cache = {}
 EVENT_STATUS = {'created': 'NEW', 'accepted': 'IN_PROGRESS', 'completed': 'DONE',
-                'canceled': 'CANCELED', 'stopped': 'STOPPED', 'resumed': 'IN_PROGRESS'}
+                'canceled': 'CANCELED', 'stopped': 'STOPPED', 'resumed': 'IN_PROGRESS',
+                'long_repair': 'LONG_REPAIR'}
 
 
 def client_config():

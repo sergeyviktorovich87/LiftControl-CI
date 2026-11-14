@@ -20,6 +20,7 @@ export default function TicketWorkflow({ item = {}, data, user, onClose, onSaved
   const [files, setFiles] = useState([]);
   const [reason, setReason] = useState('');
   const [stopReason, setStopReason] = useState('');
+  const [repairDelay, setRepairDelay] = useState({reason: '', expected_date: ''});
   const [assigned, setAssigned] = useState(item.assigned_to || '');
   const [additional, setAdditional] = useState([]);
   const createdLifts = useRef(new Set());
@@ -107,7 +108,7 @@ export default function TicketWorkflow({ item = {}, data, user, onClose, onSaved
     });
   };
 
-  const canComment = ['NEW', 'IN_PROGRESS', 'STOPPED'].includes(ticket.status)
+  const canComment = ['NEW', 'IN_PROGRESS', 'STOPPED', 'LONG_REPAIR'].includes(ticket.status)
     && (user.can_manage || user.on_duty || ticket.can_complete);
 
   return <Dialog wide title={existing ? 'Заявка #' + ticket.id : 'Новая заявка'} onClose={onClose}>
@@ -159,6 +160,10 @@ export default function TicketWorkflow({ item = {}, data, user, onClose, onSaved
           {ticket.repair && <div className="notice"><b>Выполненные работы:</b> {ticket.repair}</div>}
           {ticket.stopped_at && <div className="notice"><b>{ticket.status==='DONE'?'Остановка в истории:':'Лифт остановлен:'}</b> {ticket.stop_reason}
             <small>{new Date(ticket.stopped_at).toLocaleString('ru-RU',{timeZone:user.timezone})}</small></div>}
+          {ticket.status==='LONG_REPAIR'&&<div className="notice">
+            <b>Длительный ремонт</b> <p>{ticket.long_repair_reason}</p>
+            {ticket.expected_repair_date&&<small>Ожидаемая дата · {ticket.expected_repair_date.split('-').reverse().join('.')}</small>}
+          </div>}
           {ticket.cancellation_reason && <div className="notice">
             <b>Причина отмены:</b> {ticket.cancellation_reason}</div>}
         </div>
@@ -179,7 +184,18 @@ export default function TicketWorkflow({ item = {}, data, user, onClose, onSaved
         <footer className="form-actions"><button type="button" className="danger" disabled={busy||stopReason.trim().length<5}
           onClick={()=>run(async()=>{await api(`tickets/${ticket.id}/stop/`,{method:'POST',body:{reason:stopReason.trim()}});setStopReason('');return 'Остановка сохранена. Заявка остаётся открытой.';})}>Лифт остановлен</button></footer>
       </section>}
-      {ticket.can_resume && <div className="form-actions"><button disabled={busy} onClick={()=>run(async()=>{await api(`tickets/${ticket.id}/resume/`,{method:'POST'});return 'Ремонт продолжен. Лифт остаётся остановленным до завершения ремонта.';})}>Продолжить ремонт</button></div>}
+      {ticket.can_resume && <div className="form-actions"><button disabled={busy} onClick={()=>run(async()=>{await api(`tickets/${ticket.id}/resume/`,{method:'POST'});return 'Ремонт продолжен.';})}>Продолжить ремонт</button></div>}
+
+      {ticket.can_complete&&<details className="panel dialog-content">
+        <summary>Длительный ремонт</summary>
+        <Field label="Причина длительного ремонта"><textarea maxLength={1000} value={repairDelay.reason} onChange={e=>setRepairDelay({...repairDelay,reason:e.target.value})}/></Field>
+        <Field label="Ожидаемая дата (необязательно)"><input type="date" value={repairDelay.expected_date} onChange={e=>setRepairDelay({...repairDelay,expected_date:e.target.value})}/></Field>
+        <button type="button" disabled={busy||repairDelay.reason.trim().length<5} onClick={()=>run(async()=>{
+          await api(`tickets/${ticket.id}/long-repair/`,{method:'POST',body:repairDelay});
+          setRepairDelay({reason:'',expected_date:''});
+          return 'Длительный ремонт сохранён.';
+        })}>Сохранить длительный ремонт</button>
+      </details>}
 
       {ticket.can_complete && <section className="panel dialog-content">
         <h2>Завершение ремонта</h2>
@@ -266,7 +282,7 @@ export default function TicketWorkflow({ item = {}, data, user, onClose, onSaved
             <span><b>{({
               created: 'Создана', accepted: 'Принята в работу', completed: 'Выполнена',
               canceled: 'Отменена', reassigned: 'Переназначена', commented: 'Комментарий',
-              stopped: 'Лифт остановлен', resumed: 'Ремонт продолжен',
+              stopped: 'Лифт остановлен', resumed: 'Ремонт продолжен', long_repair: 'Длительный ремонт',
             })[ev.action] || ev.action}</b>
               <small>{ev.actor} · {new Date(ev.created_at).toLocaleString('ru-RU')}</small>
               {ev.reason && <p>{ev.reason}</p>}

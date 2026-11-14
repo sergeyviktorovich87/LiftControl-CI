@@ -1,4 +1,6 @@
 """Ticket state transitions and permissions; never trust client role or status."""
+from datetime import date
+
 from django.db import transaction
 from django.utils import timezone
 from rest_framework.exceptions import PermissionDenied, ValidationError
@@ -41,7 +43,8 @@ def can_accept_ticket(user, ticket):
 
 
 def can_finish_ticket(user, ticket):
-    return bool(role(user) == 'MECHANIC' and ticket.status in (Ticket.Status.IN_PROGRESS, Ticket.Status.STOPPED)
+    return bool(role(user) == 'MECHANIC' and ticket.status in (
+                Ticket.Status.IN_PROGRESS, Ticket.Status.STOPPED, Ticket.Status.LONG_REPAIR)
                 and technician_id(user)
                 and technician_id(user) == ticket.assigned_to_id)
 
@@ -58,7 +61,7 @@ def add_event(ticket, user, action, before='', after='', reason=''):
     audit(user, 'ticket.' + action, ticket.pk)
     # Only new tickets and state changes warrant delivery to their recipients.
     # Comments, corrections and photo uploads stay in the timeline without push spam.
-    if action not in ('created', 'accepted', 'completed', 'canceled', 'reassigned', 'stopped', 'resumed'):
+    if action not in ('created', 'accepted', 'completed', 'canceled', 'reassigned', 'stopped', 'resumed', 'long_repair'):
         return
     from .notification_inbox import enqueue_ticket
     enqueue_ticket(row)
@@ -180,12 +183,35 @@ def stop_ticket(user, ticket_id, reason):
 @transaction.atomic
 def resume_ticket(user, ticket_id):
     ticket = Ticket.objects.select_for_update().get(pk=ticket_id, organization=org(user))
-    if ticket.status != Ticket.Status.STOPPED or not can_finish_ticket(user, ticket):
+    if ticket.status not in (Ticket.Status.STOPPED, Ticket.Status.LONG_REPAIR) or not can_finish_ticket(user, ticket):
         raise PermissionDenied('Продолжить ремонт может исполнитель остановленной заявки.')
+    previous = ticket.status
     ticket.status = Ticket.Status.IN_PROGRESS
     ticket.save(update_fields=['status', 'updated_at'])
     # Resuming repair does not certify that the physical lift works again.
-    add_event(ticket, user, 'resumed', before=Ticket.Status.STOPPED, after=Ticket.Status.IN_PROGRESS)
+    add_event(ticket, user, 'resumed', before=previous, after=Ticket.Status.IN_PROGRESS)
+    return ticket
+
+
+@transaction.atomic
+def defer_repair(user, ticket_id, reason, expected_date=None):
+    ticket = Ticket.objects.select_for_update().get(pk=ticket_id, organization=org(user))
+    if not can_finish_ticket(user, ticket):
+        raise PermissionDenied('Длительный ремонт отмечает исполнитель заявки.')
+    text = reason.strip() if isinstance(reason, str) else ''
+    if not 5 <= len(text) <= 1000:
+        raise ValidationError({'reason': 'Укажите причину длительного ремонта (5–1000 символов).'})
+    try:
+        due = date.fromisoformat(expected_date) if expected_date not in (None, '') else None
+    except (ValueError, TypeError):
+        raise ValidationError({'expected_date': 'Укажите дату ГГГГ-ММ-ДД.'})
+    previous = ticket.status
+    ticket.status = Ticket.Status.LONG_REPAIR
+    ticket.long_repair_reason = text
+    ticket.expected_repair_date = due
+    ticket.save(update_fields=['status', 'long_repair_reason', 'expected_repair_date', 'updated_at'])
+    add_event(ticket, user, 'long_repair', before=previous, after=ticket.status,
+              reason=(f'{text} · до {due.isoformat()}' if due else text)[:1000])
     return ticket
 
 
@@ -212,7 +238,7 @@ def cancel_ticket(user, ticket_id, reason):
 @transaction.atomic
 def add_comment(user, ticket_id, body):
     ticket = Ticket.objects.select_for_update().get(pk=ticket_id, organization=org(user))
-    if ticket.status not in (Ticket.Status.NEW, Ticket.Status.IN_PROGRESS, Ticket.Status.STOPPED):
+    if ticket.status not in (Ticket.Status.NEW, Ticket.Status.IN_PROGRESS, Ticket.Status.STOPPED, Ticket.Status.LONG_REPAIR):
         raise PermissionDenied('Завершённая или отменённая заявка доступна только для чтения.')
     if not (can_finish_ticket(user, ticket) or role(user) in PRIVILEGED or is_on_duty(user)):
         raise PermissionDenied('Добавлять комментарии вправе исполнитель или дежурный.')

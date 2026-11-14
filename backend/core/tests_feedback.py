@@ -66,6 +66,23 @@ class FieldFeedbackTests(TestCase):
         self.assertEqual(self.ticket.stop_reason, 'Нужна запчасть, привод дверей')
         self.assertEqual(list(self.ticket.events.values_list('action', flat=True)), ['accepted','stopped','commented','resumed','completed'])
 
+    def test_long_repair_has_reason_and_expected_date_without_restarting_stopped_lift(self):
+        self.accept()
+        path = f'tickets/{self.ticket.pk}/'
+        self.assertEqual(self.post(path + 'stop/', {'reason': 'Ожидаем запчасть'}).status_code, 200)
+        self.assertEqual(self.post(path + 'long-repair/', {'reason': ''}).status_code, 400)
+        paused = self.post(path + 'long-repair/', {
+            'reason': 'Поставка привода', 'expected_date': '2099-10-08',
+        })
+        self.assertEqual(paused.status_code, 200, paused.data)
+        self.assertEqual(paused.data['status'], 'LONG_REPAIR')
+        self.assertEqual(paused.data['expected_repair_date'], '2099-10-08')
+        self.lift.refresh_from_db()
+        self.assertIsNotNone(self.lift.stopped_at)
+        self.assertEqual(self.post(path + 'resume/', {}).status_code, 200)
+        self.lift.refresh_from_db()
+        self.assertIsNotNone(self.lift.stopped_at)
+
     def test_other_unresolved_stop_is_not_cleared_by_completion(self):
         self.accept()
         self.post(f'tickets/{self.ticket.pk}/stop/', {'reason': 'Ожидаем плату'})
@@ -104,6 +121,26 @@ class FieldFeedbackTests(TestCase):
         self.assertEqual(self.lift.assigned_technician, self.replacement)
         self.assertFalse(Membership.objects.get(user=self.worker, organization=self.org).active)
         self.assertTrue(Membership.objects.get(user=self.worker, organization=self.other).active)
+
+    def test_archive_staff_accepts_lift_by_lift_transfer_and_unassignment(self):
+        another = Elevator.objects.create(
+            organization=self.org, building=self.lift.building, inventory_number='SECOND',
+            assigned_technician=self.tech,
+        )
+        self.client.force_authenticate(self.admin)
+        invalid = self.post(f'technicians/{self.tech.pk}/archive/', {
+            'reason': 'Увольнение', 'lift_assignments': {str(self.lift.pk): None},
+        })
+        self.assertEqual(invalid.status_code, 400)
+        archived = self.post(f'technicians/{self.tech.pk}/archive/', {
+            'reason': 'Увольнение',
+            'lift_assignments': {str(self.lift.pk): self.replacement.pk, str(another.pk): None},
+        })
+        self.assertEqual(archived.status_code, 200, archived.data)
+        self.lift.refresh_from_db()
+        another.refresh_from_db()
+        self.assertEqual(self.lift.assigned_technician_id, self.replacement.pk)
+        self.assertIsNone(another.assigned_technician_id)
 
     def test_native_queue_rechecks_access_password_and_current_ticket_state(self):
         from .native_push import send_one

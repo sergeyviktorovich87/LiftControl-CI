@@ -54,6 +54,7 @@ class SyncQueuePage extends StatelessWidget {
                             'complete': 'Результат ремонта',
                             'stop': 'Остановка лифта',
                             'resume': 'Продолжение ремонта',
+                            'long-repair': 'Длительный ремонт',
                             'comment': 'Комментарий',
                             'photo': 'Фотография',
                             'media': 'Фото / видео / сообщение',

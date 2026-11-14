@@ -512,6 +512,25 @@ Future<bool> archiveRecord(
 ) async {
   final reason = TextEditingController();
   int? replacement;
+  var perLift = false;
+  final assignments = <String, int?>{};
+  final lifts = type == 'technicians'
+      ? c
+            .list('elevators')
+            .where(
+              (l) =>
+                  l['active'] == true && l['assigned_technician'] == item['id'],
+            )
+            .toList()
+      : <Json>[];
+  final recipients = c
+      .list('technicians')
+      .where(
+        (t) =>
+            t['active'] == true &&
+            t['id'] != item['id'] &&
+            t['can_receive_tasks'] != false,
+      );
   final confirmed = await showDialog<bool>(
     context: context,
     builder: (context) => StatefulBuilder(
@@ -542,23 +561,54 @@ Future<bool> archiveRecord(
               if (type == 'technicians')
                 DropdownButtonFormField<int>(
                   isExpanded: true,
-                  decoration: const InputDecoration(
-                    labelText: 'Передать лифты и будущие смены',
+                  decoration: InputDecoration(
+                    labelText: perLift
+                        ? 'Передать будущие смены'
+                        : 'Передать лифты и будущие смены',
                   ),
                   items: [
                     const DropdownMenuItem(
                       value: 0,
                       child: Text('Нет назначений'),
                     ),
-                    for (final tech in c.list('technicians'))
-                      if (tech['active'] == true && tech['id'] != item['id'])
+                    for (final tech in recipients)
+                      DropdownMenuItem(
+                        value: tech['id'] as int,
+                        child: Text(text(tech, 'full_name')),
+                      ),
+                  ],
+                  onChanged: (v) => replacement = v == 0 ? null : v,
+                ),
+              if (lifts.isNotEmpty)
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Указать исполнителя для каждого лифта'),
+                  value: perLift,
+                  onChanged: (value) => setState(() => perLift = value),
+                ),
+              if (perLift)
+                for (final lift in lifts)
+                  DropdownButtonFormField<int>(
+                    isExpanded: true,
+                    initialValue: assignments['${lift['id']}'] ?? 0,
+                    decoration: InputDecoration(
+                      labelText:
+                          '${text(lift, 'address')} · ${liftLabel(lift)}',
+                    ),
+                    items: [
+                      const DropdownMenuItem(
+                        value: 0,
+                        child: Text('Без назначения'),
+                      ),
+                      for (final tech in recipients)
                         DropdownMenuItem(
                           value: tech['id'] as int,
                           child: Text(text(tech, 'full_name')),
                         ),
-                  ],
-                  onChanged: (v) => replacement = v == 0 ? null : v,
-                ),
+                    ],
+                    onChanged: (value) => assignments['${lift['id']}'] =
+                        value == 0 ? null : value,
+                  ),
             ],
           ),
         ),
@@ -585,7 +635,15 @@ Future<bool> archiveRecord(
       '$type/${item['id']}/archive/',
       method: 'POST',
       expectedOrganization: organization,
-      data: {'reason': textReason, 'replacement': replacement},
+      data: {
+        'reason': textReason,
+        'replacement': replacement,
+        if (perLift)
+          'lift_assignments': {
+            for (final lift in lifts)
+              '${lift['id']}': assignments['${lift['id']}'],
+          },
+      },
     );
     await c.refresh();
     return true;

@@ -14,6 +14,20 @@ def reason(data):
     return value
 
 
+def _replacement(value, previous, organization):
+    try:
+        pk = int(value)
+    except (TypeError, ValueError, OverflowError):
+        raise ValidationError('Выберите действующего механика организации.')
+    technician = Technician.objects.filter(pk=pk, organization=organization, active=True).first()
+    if (not technician or technician == previous or not Membership.objects.filter(
+        organization=organization, technician=technician,
+        active=True, role='MECHANIC', user__is_active=True,
+    ).exists()):
+        raise ValidationError('У замены должен быть действующий доступ механика.')
+    return technician
+
+
 @transaction.atomic
 def archive_elevator(user, pk, data):
     if role(user) not in ('ADMIN', 'DIRECTOR'):
@@ -49,23 +63,36 @@ def archive_technician(user, pk, data):
         raise ValidationError('У сотрудника остались незавершённые заявки.')
     lifts = Elevator.objects.filter(organization=organization, assigned_technician=tech, active=True)
     shifts = DutyShift.objects.filter(organization=organization, technician=tech, start__gt=now)
-    replacement = None
-    if data.get('replacement'):
-        try:
-            replacement = Technician.objects.get(pk=int(data['replacement']), organization=organization, active=True)
-        except (TypeError, ValueError, Technician.DoesNotExist):
-            raise ValidationError({'replacement': 'Выберите действующего механика организации.'})
-        if replacement == tech or not Membership.objects.filter(technician=replacement, active=True, role='MECHANIC', user__is_active=True).exists():
-            raise ValidationError({'replacement': 'У замены должен быть действующий доступ механика.'})
-    if (lifts.exists() or shifts.exists()) and replacement is None:
-        raise ValidationError({'replacement': 'Выберите, кому передать закреплённые лифты и будущие дежурства.'})
-    transferred = {'lifts': list(lifts.values_list('pk', flat=True)), 'shifts': list(shifts.values_list('pk', flat=True))}
+    replacement = _replacement(data['replacement'], tech, organization) if data.get('replacement') else None
+    transferred = {'lifts': list(lifts.select_for_update().values_list('pk', flat=True)),
+                   'shifts': list(shifts.select_for_update().values_list('pk', flat=True))}
+    next_by_lift = {}
+    if data.get('lift_assignments') is not None:
+        assignments = data['lift_assignments']
+        if not isinstance(assignments, dict) or set(assignments) != {str(pk) for pk in transferred['lifts']}:
+            raise ValidationError('Список закреплённых лифтов изменился. Обновите карточку сотрудника.')
+        recipients = {}
+        for lift_id in transferred['lifts']:
+            value = assignments[str(lift_id)]
+            if value is not None and (type(value) is not int or value <= 0):
+                raise ValidationError('Укажите действующего механика или оставьте лифт без назначения.')
+            if value is not None and value not in recipients:
+                recipients[value] = _replacement(value, tech, organization)
+            next_by_lift[lift_id] = recipients[value].pk if value is not None else None
+    elif replacement:
+        next_by_lift = dict.fromkeys(transferred['lifts'], replacement.pk)
+    elif transferred['lifts']:
+        raise ValidationError({'replacement': 'Укажите назначения для закреплённых лифтов.'})
+    if transferred['shifts'] and replacement is None:
+        raise ValidationError({'replacement': 'Выберите, кому передать будущие дежурства.'})
+    for lift_id, technician_id in next_by_lift.items():
+        lifts.filter(pk=lift_id).update(assigned_technician_id=technician_id)
     if replacement:
-        lifts.update(assigned_technician=replacement)
         shifts.update(technician=replacement, updated_at=now, acknowledged_at=None, acknowledged_by=None)
     if member:
         member.active = False
         member.save(update_fields=['active'])
     tech.active = False
     tech.save(update_fields=['active'])
-    audit(user, 'technician.archived', tech.pk, {'reason': text, 'replacement': replacement.pk if replacement else None, **transferred})
+    audit(user, 'technician.archived', tech.pk, {'reason': text, 'replacement': replacement.pk if replacement else None,
+                                                  'lift_assignments': next_by_lift, **transferred})

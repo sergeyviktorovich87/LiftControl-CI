@@ -112,6 +112,8 @@ def synchronize(request):
             ticket = flow.stop_ticket(request.user, ticket_id, body['reason'])
         elif kind == 'resume' and not body:
             ticket = flow.resume_ticket(request.user, ticket_id)
+        elif kind == 'long-repair' and set(body) in ({'reason'}, {'reason', 'expected_date'}):
+            ticket = flow.defer_repair(request.user, ticket_id, body['reason'], body.get('expected_date'))
         elif kind == 'cancel' and set(body) == {'reason'}:
             ticket = flow.cancel_ticket(request.user, ticket_id, body['reason'])
         elif kind == 'assign' and set(body) == {'assigned_to', 'reason'}:

@@ -159,6 +159,10 @@ class LiftController extends ChangeNotifier {
             ticket['stopped_at'] = command['occurred_at'];
           case 'resume':
             ticket['status'] = 'IN_PROGRESS';
+          case 'long-repair':
+            ticket['status'] = 'LONG_REPAIR';
+            ticket['long_repair_reason'] = body['reason'];
+            ticket['expected_repair_date'] = body['expected_date'];
           case 'cancel':
             ticket['status'] = 'CANCELED';
             ticket['cancellation_reason'] = body['reason'];
@@ -186,9 +190,15 @@ class LiftController extends ChangeNotifier {
               responsible == me['technician'] &&
               ticket['status'] == 'NEW';
           ticket['can_complete'] =
-              own && ['IN_PROGRESS', 'STOPPED'].contains(ticket['status']);
+              own &&
+              [
+                'IN_PROGRESS',
+                'STOPPED',
+                'LONG_REPAIR',
+              ].contains(ticket['status']);
           ticket['can_stop'] = own && ticket['status'] == 'IN_PROGRESS';
-          ticket['can_resume'] = own && ticket['status'] == 'STOPPED';
+          ticket['can_resume'] =
+              own && ['STOPPED', 'LONG_REPAIR'].contains(ticket['status']);
           ticket['can_assign'] =
               ticket['can_assign'] == true && ticket['status'] == 'NEW';
           ticket['can_cancel'] =
@@ -920,12 +930,18 @@ class LiftController extends ChangeNotifier {
         'complete': 'can_complete',
         'stop': 'can_stop',
         'resume': 'can_resume',
+        'long-repair': 'can_complete',
         'photo': 'can_complete',
         'cancel': 'can_cancel',
         'assign': 'can_assign',
       }[kind];
       if (kind == 'comment' &&
-          (!['NEW', 'IN_PROGRESS', 'STOPPED'].contains(ticket['status']) ||
+          (![
+                'NEW',
+                'IN_PROGRESS',
+                'STOPPED',
+                'LONG_REPAIR',
+              ].contains(ticket['status']) ||
               !(ticket['can_complete'] == true ||
                   me['on_duty'] == true ||
                   me['can_manage'] == true))) {
@@ -1232,12 +1248,15 @@ class LiftController extends ChangeNotifier {
   Future<void> _acknowledgeCommissioning(String key) async {
     var acknowledged = false;
     for (final row in List<Json>.from(_outboxRows)) {
-      if (row['command']['type'] != 'commissioning' || row['state'] != 'synced')
+      if (row['command']['type'] != 'commissioning' ||
+          row['state'] != 'synced') {
         continue;
+      }
       await outbox.acknowledge(key, row['id'] as String);
       final file = row['file_id'];
-      if (!outbox.nativeSync && file is String)
+      if (!outbox.nativeSync && file is String) {
         await mediaFiles.remove(key, file);
+      }
       acknowledged = true;
     }
     if (acknowledged) syncRevision++;
@@ -1272,7 +1291,7 @@ class LiftController extends ChangeNotifier {
       return _recordTicket('create', data ?? {});
     }
     final ticketAction = RegExp(
-      r'^tickets/(\d+)/(accept|complete|stop|resume|comment|cancel|assign)/$',
+      r'^tickets/(\d+)/(accept|complete|stop|resume|long-repair|comment|cancel|assign)/$',
     ).firstMatch(path);
     if (method == 'POST' && ticketAction != null) {
       return _recordTicket(

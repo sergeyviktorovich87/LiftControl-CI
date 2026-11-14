@@ -379,8 +379,9 @@ class _PartFormState extends State<PartForm> {
   }
 
   Future<void> _save() async {
-    if (_busy || !_canEdit || _frozen || !_form.currentState!.validate())
+    if (_busy || !_canEdit || _frozen || !_form.currentState!.validate()) {
       return;
+    }
     if (_elevator == null) {
       showError(context, const ApiError('Выберите лифт.'));
       return;
@@ -503,12 +504,13 @@ class _PartFormState extends State<PartForm> {
                               method: 'DELETE',
                               expectedOrganization: _org,
                             );
-                            if (mounted)
+                            if (mounted) {
                               setState(
                                 () => _photos.removeWhere(
                                   (p) => p['id'] == photo['id'],
                                 ),
                               );
+                            }
                             await widget.controller.refresh();
                           } catch (e) {
                             if (context.mounted) showError(context, e);
@@ -798,8 +800,9 @@ class SettingsPage extends StatelessWidget {
                         DropdownMenuItem(value: size, child: Text('$size МБ')),
                     ],
                     onChanged: (size) {
-                      if (size != null)
+                      if (size != null) {
                         unawaited(controller.setCacheLimit(size));
+                      }
                     },
                   ),
                   TextButton(

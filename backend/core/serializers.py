@@ -88,7 +88,7 @@ class TicketSerializer(TenantSerializer):
         return can_stop_ticket(self.context['request'].user, obj)
 
     def get_can_resume(self, obj):
-        return obj.status == Ticket.Status.STOPPED and self.get_can_complete(obj)
+        return obj.status in (Ticket.Status.STOPPED, Ticket.Status.LONG_REPAIR) and self.get_can_complete(obj)
 
     def get_created_by_name(self, obj):
         actor = obj.created_by
@@ -135,7 +135,7 @@ class TicketSerializer(TenantSerializer):
             'organization', 'created_by', 'status',
             'repair', 'completed_at', 'accepted_at', 'canceled_at',
             'canceled_by', 'cancellation_reason', 'created_at', 'updated_at',
-            'stopped_at', 'stop_reason',
+            'stopped_at', 'stop_reason', 'long_repair_reason', 'expected_repair_date',
         ]
 
     def validate(self, attrs):

@@ -9,8 +9,13 @@ import 'common.dart';
 import 'sync_queue.dart';
 
 class CommissioningPage extends StatefulWidget {
-  const CommissioningPage({super.key, required this.controller});
+  const CommissioningPage({
+    super.key,
+    required this.controller,
+    this.initialProject,
+  });
   final LiftController controller;
+  final int? initialProject;
   @override
   State<CommissioningPage> createState() => _CommissioningPageState();
 }
@@ -30,7 +35,7 @@ class _CommissioningPageState extends State<CommissioningPage> {
   void initState() {
     super.initState();
     c.addListener(_afterRefresh);
-    unawaited(_load());
+    unawaited(_load(initialProject: widget.initialProject));
   }
 
   @override
@@ -40,13 +45,17 @@ class _CommissioningPageState extends State<CommissioningPage> {
   }
 
   void _afterRefresh() {
-    if (!c.online || c.refreshing || _busy || _readGeneration == c.syncRevision)
+    if (!c.online ||
+        c.refreshing ||
+        _busy ||
+        _readGeneration == c.syncRevision) {
       return;
+    }
     _readGeneration = c.syncRevision;
     unawaited(_load());
   }
 
-  Future<void> _load() async {
+  Future<void> _load({int? initialProject}) async {
     if (!mounted || c.organization == null) return;
     setState(() {
       _busy = true;
@@ -56,7 +65,7 @@ class _CommissioningPageState extends State<CommissioningPage> {
       final rows = records(
         await c.resource('commissioning/', expectedOrganization: org),
       );
-      final selected = _detail?['id'];
+      final selected = initialProject ?? _detail?['id'];
       final data = selected == null
           ? null
           : await c.resource(
@@ -108,8 +117,9 @@ class _CommissioningPageState extends State<CommissioningPage> {
         'commissioning/$id/',
         expectedOrganization: org,
       );
-      if (mounted)
+      if (mounted) {
         setState(() => _detail = Map<String, dynamic>.from(result as Map));
+      }
     } catch (e) {
       if (mounted) setState(() => _error = '$e');
     } finally {
@@ -144,11 +154,12 @@ class _CommissioningPageState extends State<CommissioningPage> {
       await _load();
     } catch (e) {
       c.log.record('commissioning_mutation_failed');
-      if (mounted)
+      if (mounted) {
         setState(() {
           _error = '$e';
           _busy = false;
         });
+      }
     }
   }
 
@@ -226,8 +237,9 @@ class _CommissioningPageState extends State<CommissioningPage> {
                           firstDate: DateTime(2000),
                           lastDate: DateTime(2100),
                         );
-                        if (date != null && ctx.mounted)
+                        if (date != null && ctx.mounted) {
                           update(() => spent = date);
+                        }
                       },
                     ),
                     TextButton.icon(
@@ -240,8 +252,9 @@ class _CommissioningPageState extends State<CommissioningPage> {
                       onPressed: () async {
                         try {
                           final photo = await _pickReceipt(ctx);
-                          if (photo != null && ctx.mounted)
+                          if (photo != null && ctx.mounted) {
                             update(() => receipt = photo);
+                          }
                         } catch (error) {
                           if (ctx.mounted) showError(ctx, error);
                         }

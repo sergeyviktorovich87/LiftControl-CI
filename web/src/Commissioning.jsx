@@ -3,7 +3,7 @@ import {api} from './api';
 import {compressImage} from './imageCompression';
 
 /** 0.13 commissioning workspace. All authorization lives on Django, not JSX. */
-export default function Commissioning({user}) {
+export default function Commissioning({user,initialProject,onProjectOpened}) {
   const [projects,setProjects]=useState([]),[selected,setSelected]=useState(null);
   const [members,setMembers]=useState([]),[error,setError]=useState(''),[busy,setBusy]=useState(false);
   const [newName,setNewName]=useState(''),[newAddress,setNewAddress]=useState('');
@@ -28,6 +28,7 @@ export default function Commissioning({user}) {
     let alive=true;
     setSelected(null);setProjects([]);setError('');setExpenseOperation(null);
     api('commissioning/').then(rows=>{if(alive)setProjects(rows);}).catch(e=>{if(alive)setError(e.message);});
+    if(initialProject){onProjectOpened?.();openProject(initialProject).catch(e=>{if(alive)setError(e.message);});}
     if(canManage)api('organizations/members/').then(rows=>{if(alive)setMembers(rows.filter(m=>m.active&&m.can_commissioning&&['ADJUSTER','MECHANIC'].includes(m.role)));}).catch(()=>{});
     return()=>{alive=false;};
   },[user.organization_id,canManage]);

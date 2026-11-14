@@ -4,10 +4,10 @@ import {Plus,RefreshCw,UserRound,Paperclip} from 'lucide-react';
 import {api} from './api';
 import {Badge,Dialog,Field} from './components';
 
-export default function Tasks({data,user,onChanged,createRequested=false,onCreateHandled}){
+export default function Tasks({data,user,onChanged,createRequested=false,onCreateHandled,initialTask,onTaskOpened}){
  const [current,setCurrent]=useState(null),[error,setError]=useState(''),[filter,setFilter]=useState('active');
  useEffect(()=>{if(createRequested){setCurrent({});onCreateHandled?.();}},[createRequested]);
- useEffect(()=>{const id=new URLSearchParams(location.search).get('task');if(/^[1-9][0-9]*$/.test(id||'')){const url=new URL(location.href);url.searchParams.delete('task');history.replaceState(null,'',url);api('tasks/'+id+'/').then(setCurrent).catch(e=>setError(e.message));}},[]);
+ useEffect(()=>{const id=initialTask||new URLSearchParams(location.search).get('task');if(/^[1-9][0-9]*$/.test(id||'')){const url=new URL(location.href);url.searchParams.delete('task');history.replaceState(null,'',url);if(initialTask)onTaskOpened?.();api('tasks/'+id+'/').then(setCurrent).catch(e=>setError(e.message));}},[]);
  const rows=(data.tasks||[]).filter(t=>filter==='all'||(filter==='active')===!['DONE','CANCELED'].includes(t.status));
  return <><div className="page-heading"><div><span className="eyebrow">ЛИЧНАЯ РАБОТА</span><h1>Личные задания</h1><p>Задание видят только исполнитель и руководители организации.</p></div><div className="actions"><button onClick={onChanged}><RefreshCw size={17}/>Обновить</button>{user.can_manage&&<button className="primary" onClick={()=>setCurrent({})}><Plus size={17}/>Новое задание</button>}</div></div>
   <div className="tabs">{[['active','Активные'],['closed','Завершённые'],['all','Все']].map(([key,label])=><button key={key} className={filter===key?'selected':''} onClick={()=>setFilter(key)}>{label}</button>)}</div>{error&&<p className="error">{error}</p>}

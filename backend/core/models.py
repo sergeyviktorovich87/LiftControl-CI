@@ -139,6 +139,7 @@ class Ticket(models.Model):
         ASSIGNED = 'ASSIGNED', 'Назначена'
         IN_PROGRESS = 'IN_PROGRESS', 'В работе'
         STOPPED = 'STOPPED', 'Лифт остановлен'
+        LONG_REPAIR = 'LONG_REPAIR', 'Длительный ремонт'
         DONE = 'DONE', 'Выполнена'
         CANCELED = 'CANCELED', 'Отменена'
 
@@ -154,6 +155,8 @@ class Ticket(models.Model):
     completed_at = models.DateTimeField(null=True, blank=True)
     stopped_at = models.DateTimeField(null=True, blank=True)
     stop_reason = models.TextField(blank=True, default='', db_default='', max_length=1000)
+    long_repair_reason = models.TextField(blank=True, default='', db_default='', max_length=1000)
+    expected_repair_date = models.DateField(null=True, blank=True)
 
     class Meta:
         ordering = ['-created_at']

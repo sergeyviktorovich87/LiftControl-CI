@@ -68,6 +68,7 @@ fun displayPushEvent(context: Context, data: Map<String, String>, source: String
         "canceled" -> "Заявка отменена"
         "stopped" -> "Лифт остановлен"
         "resumed" -> "Ремонт продолжен"
+        "long_repair" -> "Длительный ремонт"
         "reassigned" -> "Изменён исполнитель"
         else -> return false
     }
