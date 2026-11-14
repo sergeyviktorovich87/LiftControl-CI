@@ -56,20 +56,16 @@ def add_event(ticket, user, action, before='', after='', reason=''):
         action=action, before=before, after=after, reason=reason,
     )
     audit(user, 'ticket.' + action, ticket.pk)
-    # Only new tickets and state changes warrant a push to the entire team.
+    # Only new tickets and state changes warrant delivery to their recipients.
     # Comments, corrections and photo uploads stay in the timeline without push spam.
     if action not in ('created', 'accepted', 'completed', 'canceled', 'reassigned', 'stopped', 'resumed'):
         return
     from .notification_inbox import enqueue_ticket
     enqueue_ticket(row)
     # Durable per-device queue. Nothing is posted to an external endpoint from an HTTP request.
-    subscriptions = PushSubscription.objects.filter(
-        user__is_active=True,
-        user__memberships__active=True, user__memberships__role='MECHANIC',
-        user__memberships__organization=ticket.organization,
-        user__memberships__technician__active=True,
-        user__memberships__technician__organization=ticket.organization,
-    ).select_related('user').distinct()
+    from .notification_preferences import ticket_recipients
+    recipients = ticket_recipients(ticket, action).filter(role='MECHANIC').values('user_id')
+    subscriptions = PushSubscription.objects.filter(user_id__in=recipients)
     PushDelivery.objects.bulk_create([
         PushDelivery(organization=ticket.organization, ticket=ticket,
                      subscription=sub, kind=action)

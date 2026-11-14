@@ -29,6 +29,45 @@ class DeviceMediaFiles implements PendingMediaFiles {
       channel.invokeMethod<void>('mediaRemove', {'scope': scope, 'id': id});
 }
 
+class DownloadCache {
+  static const _channel = DeviceMediaFiles.channel;
+
+  Future<({Uint8List bytes, String etag})?> read(
+    String scope,
+    String resource,
+  ) async {
+    final row = await _channel.invokeMapMethod<String, dynamic>(
+      'downloadRead',
+      {'scope': scope, 'resource': resource},
+    );
+    if (row == null) return null;
+    return (bytes: row['bytes'] as Uint8List, etag: row['etag'] as String);
+  }
+
+  Future<void> write(
+    String scope,
+    String resource,
+    Uint8List bytes,
+    String etag,
+    int limit,
+  ) => _channel.invokeMethod<void>('downloadWrite', {
+    'scope': scope,
+    'resource': resource,
+    'bytes': bytes,
+    'etag': etag,
+    'limit': limit,
+  });
+
+  Future<void> remove(String scope, String resource) =>
+      _channel.invokeMethod<void>('downloadRemove', {
+        'scope': scope,
+        'resource': resource,
+      });
+
+  Future<void> clear(String scope) =>
+      _channel.invokeMethod<void>('downloadClear', {'scope': scope});
+}
+
 class StoredMediaFiles implements PendingMediaFiles {
   StoredMediaFiles(this.store);
   final SecretStore store;

@@ -36,66 +36,70 @@ class MorePage extends StatelessWidget {
       ),
       const SizedBox(height: 16),
       if (controller.me['commissioning_only'] != true) ...[
-      const SectionTitle('Рабочие разделы'),
-      _link(
-        context,
-        Icons.photo_library_outlined,
-        'Медиаматериалы',
-        'Фото и видео организации',
-        MediaPage(controller: controller),
-      ),
-      const SizedBox(height: 12),
-      _link(
-        context,
-        Icons.assignment_ind_outlined,
-        'Личные задания',
-        'Задания, назначенные лично вам',
-        TasksPage(controller: controller),
-      ),
-      const SizedBox(height: 12),
-      _link(
-        context,
-        Icons.build_outlined,
-        'Журнал ТО',
-        'Обслуживание, осмотры и ремонт',
-        MaintenancePage(controller: controller),
-      ),
-      const SizedBox(height: 12),
-      _link(
-        context,
-        Icons.chat_bubble_outline,
-        'Чат бригады',
-        'Сообщения выбранной организации',
-        ChatPage(controller: controller),
-      ),
-      const SizedBox(height: 12),
-      _link(
-        context,
-        Icons.inventory_2_outlined,
-        'Запчасти',
-        'Заявки на материалы',
-        PartsPage(controller: controller),
-      ),
-      const SizedBox(height: 22),
-      if (controller.organization != null) ...[
+        const SectionTitle('Рабочие разделы'),
         _link(
           context,
-          Icons.people_outline,
-          'Сотрудники',
-          'Команда, аккаунты и приглашения',
-          StaffPage(controller: controller),
+          Icons.photo_library_outlined,
+          'Медиаматериалы',
+          'Фото и видео организации',
+          MediaPage(controller: controller),
         ),
         const SizedBox(height: 12),
+        _link(
+          context,
+          Icons.assignment_ind_outlined,
+          'Личные задания',
+          'Задания, назначенные лично вам',
+          TasksPage(controller: controller),
+        ),
+        const SizedBox(height: 12),
+        _link(
+          context,
+          Icons.build_outlined,
+          'Журнал ТО',
+          'Обслуживание, осмотры и ремонт',
+          MaintenancePage(controller: controller),
+        ),
+        const SizedBox(height: 12),
+        _link(
+          context,
+          Icons.chat_bubble_outline,
+          'Чат бригады',
+          'Сообщения выбранной организации',
+          ChatPage(controller: controller),
+        ),
+        const SizedBox(height: 12),
+        _link(
+          context,
+          Icons.inventory_2_outlined,
+          'Запчасти',
+          'Заявки на материалы',
+          PartsPage(controller: controller),
+        ),
+        const SizedBox(height: 22),
+        if (controller.organization != null) ...[
+          _link(
+            context,
+            Icons.people_outline,
+            'Сотрудники',
+            'Команда, аккаунты и приглашения',
+            StaffPage(controller: controller),
+          ),
+          const SizedBox(height: 12),
+        ],
       ],
-      ],
-      if (controller.me['can_commissioning'] == true || controller.me['commissioning_only'] == true) ...[
+      if (controller.me['can_commissioning'] == true &&
+          controller.me['commissioning_only'] != true) ...[
         const SectionTitle('Пусконаладка'),
         _link(
           context,
           Icons.precision_manufacturing_outlined,
           'Пусконаладка',
           'Объекты, лифты, прогресс, допработы, личные расходы',
-          CommissioningPage(key: ValueKey(controller.organization), controller: controller),
+          CommissioningPage(
+            key: ValueKey(controller.organization),
+            controller: controller,
+          ),
         ),
         const SizedBox(height: 12),
       ],
@@ -230,29 +234,47 @@ class PartsPage extends StatelessWidget {
                         if (p['can_edit'] == true)
                           TextButton.icon(
                             onPressed: controller.canWrite
-                                ? () => Navigator.push(context, MaterialPageRoute<void>(
-                                    builder: (_) => PartForm(controller: controller, item: p)))
+                                ? () => Navigator.push(
+                                    context,
+                                    MaterialPageRoute<void>(
+                                      builder: (_) => PartForm(
+                                        controller: controller,
+                                        item: p,
+                                      ),
+                                    ),
+                                  )
                                 : null,
                             icon: const Icon(Icons.edit_outlined),
                             label: const Text('Редактировать'),
                           ),
                         TextButton.icon(
-                          onPressed: () => Navigator.push(context, MaterialPageRoute<void>(
-                            builder: (_) => ChatPage(
-                              controller: controller, quoteKind: 'part',
-                              quoteId: p['id'] as int, quoteTitle: text(p, 'part')))),
+                          onPressed: () => Navigator.push(
+                            context,
+                            MaterialPageRoute<void>(
+                              builder: (_) => ChatPage(
+                                controller: controller,
+                                quoteKind: 'part',
+                                quoteId: p['id'] as int,
+                                quoteTitle: text(p, 'part'),
+                              ),
+                            ),
+                          ),
                           icon: const Icon(Icons.chat_bubble_outline),
                           label: const Text('Обсудить в чате'),
                         ),
                         if (records(p['photos'] ?? []).isNotEmpty)
                           ExpansionTile(
                             tilePadding: EdgeInsets.zero,
-                            title: Text('Фотографии (${records(p['photos']).length})'),
+                            title: Text(
+                              'Фотографии (${records(p['photos']).length})',
+                            ),
                             children: [
                               for (final photo in records(p['photos']))
                                 PrivateMedia(
-                                  key: ValueKey(photo['id']), controller: controller,
-                                  organization: org, attachment: photo,
+                                  key: ValueKey(photo['id']),
+                                  controller: controller,
+                                  organization: org,
+                                  attachment: photo,
                                 ),
                             ],
                           ),
@@ -325,7 +347,8 @@ class _PartFormState extends State<PartForm> {
   int? _savedId;
   final List<XFile> _picked = [];
   late final List<Json> _photos;
-  bool get _frozen => ['ORDERED', 'RECEIVED', 'ISSUED'].contains(widget.item?['status']);
+  bool get _frozen =>
+      ['ORDERED', 'RECEIVED', 'ISSUED'].contains(widget.item?['status']);
   bool get _canEdit => widget.item == null || widget.item?['can_edit'] == true;
   @override
   void initState() {
@@ -336,9 +359,14 @@ class _PartFormState extends State<PartForm> {
     _part.text = text(item ?? {}, 'part');
     _quantity.text = '${item?['quantity'] ?? 1}';
     _notes.text = text(item ?? {}, 'notes');
-    _photos = records(item?['photos'] ?? []).map((v) => Map<String, dynamic>.from(v)).toList();
+    _photos = records(
+      item?['photos'] ?? [],
+    ).map((v) => Map<String, dynamic>.from(v)).toList();
     for (final lift in widget.controller.list('elevators')) {
-      if (lift['id'] == item?['elevator']) { _elevator = lift; break; }
+      if (lift['id'] == item?['elevator']) {
+        _elevator = lift;
+        break;
+      }
     }
   }
 
@@ -351,7 +379,8 @@ class _PartFormState extends State<PartForm> {
   }
 
   Future<void> _save() async {
-    if (_busy || !_canEdit || _frozen || !_form.currentState!.validate()) return;
+    if (_busy || !_canEdit || _frozen || !_form.currentState!.validate())
+      return;
     if (_elevator == null) {
       showError(context, const ApiError('Выберите лифт.'));
       return;
@@ -376,7 +405,8 @@ class _PartFormState extends State<PartForm> {
         await widget.controller.uploadMedia(
           'parts/$_savedId/photos/',
           [(bytes: await image.readAsBytes(), name: image.name)],
-          _org, field: 'file',
+          _org,
+          field: 'file',
         );
         _picked.remove(image);
       }
@@ -394,7 +424,11 @@ class _PartFormState extends State<PartForm> {
     controller: widget.controller,
     organization: _org,
     builder: (context) => Scaffold(
-      appBar: AppBar(title: Text(widget.item == null ? 'Запросить запчасть' : 'Редактировать запчасть')),
+      appBar: AppBar(
+        title: Text(
+          widget.item == null ? 'Запросить запчасть' : 'Редактировать запчасть',
+        ),
+      ),
       body: Form(
         key: _form,
         child: ListView(
@@ -459,21 +493,29 @@ class _PartFormState extends State<PartForm> {
               ),
               if (_canEdit && !_frozen)
                 TextButton.icon(
-                  onPressed: _busy ? null : () async {
-                    setState(() => _busy = true);
-                    try {
-                      await widget.controller.request(
-                        'parts/$_savedId/photos/${photo['id']}/',
-                        method: 'DELETE', expectedOrganization: _org,
-                      );
-                      if (mounted) setState(() => _photos.removeWhere((p) => p['id'] == photo['id']));
-                      await widget.controller.refresh();
-                    } catch (e) {
-                      if (context.mounted) showError(context, e);
-                    } finally {
-                      if (mounted) setState(() => _busy = false);
-                    }
-                  },
+                  onPressed: _busy
+                      ? null
+                      : () async {
+                          setState(() => _busy = true);
+                          try {
+                            await widget.controller.request(
+                              'parts/$_savedId/photos/${photo['id']}/',
+                              method: 'DELETE',
+                              expectedOrganization: _org,
+                            );
+                            if (mounted)
+                              setState(
+                                () => _photos.removeWhere(
+                                  (p) => p['id'] == photo['id'],
+                                ),
+                              );
+                            await widget.controller.refresh();
+                          } catch (e) {
+                            if (context.mounted) showError(context, e);
+                          } finally {
+                            if (mounted) setState(() => _busy = false);
+                          }
+                        },
                   icon: const Icon(Icons.delete_outline),
                   label: const Text('Удалить фотографию'),
                 ),
@@ -481,39 +523,54 @@ class _PartFormState extends State<PartForm> {
             for (final picked in _picked)
               InputChip(
                 label: Text(picked.name),
-                onDeleted: _busy ? null : () => setState(() => _picked.remove(picked)),
+                onDeleted: _busy
+                    ? null
+                    : () => setState(() => _picked.remove(picked)),
               ),
             if (_canEdit && !_frozen)
               OutlinedButton.icon(
-                onPressed: _busy ? null : () async {
-                  try {
-                    final files = await ImagePicker().pickMultiImage(
-                      maxWidth: 2560, maxHeight: 2560, imageQuality: 82,
-                    );
-                    if (files.length + _picked.length + _photos.length > 8) {
-                      throw const ApiError('Не более восьми фотографий.');
-                    }
-                    for (final f in files) {
-                      if (await f.length() > 10 * 1024 * 1024) {
-                        throw const ApiError('Фото больше 10 МБ.');
-                      }
-                    }
-                    if (mounted) setState(() => _picked.addAll(files));
-                  } catch (e) {
-                    if (context.mounted) showError(context, e);
-                  }
-                },
+                onPressed: _busy
+                    ? null
+                    : () async {
+                        try {
+                          final files = await ImagePicker().pickMultiImage(
+                            maxWidth: 2560,
+                            maxHeight: 2560,
+                            imageQuality: 82,
+                          );
+                          if (files.length + _picked.length + _photos.length >
+                              8) {
+                            throw const ApiError('Не более восьми фотографий.');
+                          }
+                          for (final f in files) {
+                            if (await f.length() > 10 * 1024 * 1024) {
+                              throw const ApiError('Фото больше 10 МБ.');
+                            }
+                          }
+                          if (mounted) setState(() => _picked.addAll(files));
+                        } catch (e) {
+                          if (context.mounted) showError(context, e);
+                        }
+                      },
                 icon: const Icon(Icons.add_a_photo_outlined),
                 label: const Text('Добавить фотографии'),
               ),
             if (_frozen)
-              const Text('Заказана поставщику: состав и фото нельзя переписывать.'),
+              const Text(
+                'Заказана поставщику: состав и фото нельзя переписывать.',
+              ),
             const SizedBox(height: 16),
             if (_canEdit && !_frozen)
               FilledButton(
-              onPressed: widget.controller.canWrite && !_busy ? _save : null,
-              child: Text(_busy ? 'Сохранение…' : widget.item == null ? 'Отправить запрос' : 'Сохранить изменения'),
-            ),
+                onPressed: widget.controller.canWrite && !_busy ? _save : null,
+                child: Text(
+                  _busy
+                      ? 'Сохранение…'
+                      : widget.item == null
+                      ? 'Отправить запрос'
+                      : 'Сохранить изменения',
+                ),
+              ),
             if (_savedId != null) ...[
               const SizedBox(height: 12),
               OutlinedButton.icon(
@@ -522,13 +579,16 @@ class _PartFormState extends State<PartForm> {
                 onPressed: () => Navigator.push(
                   context,
                   MaterialPageRoute<void>(
-                    builder: (_) => ChatPage(controller: widget.controller,
-                      quoteKind: 'part', quoteId: _savedId, quoteTitle: _part.text),
+                    builder: (_) => ChatPage(
+                      controller: widget.controller,
+                      quoteKind: 'part',
+                      quoteId: _savedId,
+                      quoteTitle: _part.text,
+                    ),
                   ),
                 ),
               ),
             ],
-
           ],
         ),
       ),
@@ -690,13 +750,28 @@ class SettingsPage extends StatelessWidget {
           ),
           const SizedBox(height: 16),
           Sheet(
-            child: SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              title: const Text('Тёмная тема'),
-              subtitle: const Text('Сохраняется на этом устройстве'),
-              value: controller.dark,
-              onChanged: controller.setDark,
-              secondary: const Icon(Icons.dark_mode_outlined),
+            child: DropdownButtonFormField<String>(
+              initialValue: controller.appearance,
+              isExpanded: true,
+              decoration: const InputDecoration(labelText: 'Тема оформления'),
+              items: [
+                for (final option in const {
+                  'light': 'Светлая',
+                  'dark': 'Тёмная',
+                  'auto': 'Как в системе',
+                  'blue': 'Синяя',
+                  'graphite': 'Графитовая',
+                  'green': 'Зелёная',
+                  'purple': 'Фиолетовая',
+                }.entries)
+                  DropdownMenuItem(
+                    value: option.key,
+                    child: Text(option.value),
+                  ),
+              ],
+              onChanged: (value) {
+                if (value != null) unawaited(controller.setAppearance(value));
+              },
             ),
           ),
           const SizedBox(height: 16),
@@ -707,6 +782,48 @@ class SettingsPage extends StatelessWidget {
           const SizedBox(height: 16),
           if (!controller.demo) UpdatesSettings(controller: controller),
           const SizedBox(height: 16),
+          if (!controller.demo && controller.organization != null) ...[
+            Sheet(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  DropdownButtonFormField<int>(
+                    initialValue: controller.cacheLimit,
+                    isExpanded: true,
+                    decoration: const InputDecoration(
+                      labelText: 'Кэш скачанных файлов',
+                    ),
+                    items: [
+                      for (final size in LiftController.cacheLimits)
+                        DropdownMenuItem(value: size, child: Text('$size МБ')),
+                    ],
+                    onChanged: (size) {
+                      if (size != null)
+                        unawaited(controller.setCacheLimit(size));
+                    },
+                  ),
+                  TextButton(
+                    onPressed: () async {
+                      try {
+                        await controller.clearDownloadedFiles();
+                        if (context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Кэш скачанных файлов очищен'),
+                            ),
+                          );
+                        }
+                      } catch (error) {
+                        if (context.mounted) showError(context, error);
+                      }
+                    },
+                    child: const Text('Очистить скачанные файлы'),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+          ],
           Sheet(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,

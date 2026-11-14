@@ -71,9 +71,9 @@ def device(request):
 
 
 def enqueue_native(ticket, kind):
+    from .notification_preferences import ticket_recipients
     event = ticket.events.order_by('-pk').first()
-    eligible_users = Membership.objects.filter(organization=ticket.organization, active=True, user__is_active=True).exclude(role='ADJUSTER').exclude(
-        role='MECHANIC', technician__isnull=True).exclude(role='MECHANIC', technician__active=False).values('user_id')
+    eligible_users = ticket_recipients(ticket, kind).values('user_id')
     devices = NativePushDevice.objects.filter(active=True, session__user_id__in=eligible_users,
         session__revoked_at__isnull=True, session__expires_at__gt=timezone.now())
     NativePushDelivery.objects.bulk_create([
@@ -82,11 +82,11 @@ def enqueue_native(ticket, kind):
 
 
 def valid_recipient(item):
-    from .notification_preferences import allows, category
+    from .notification_preferences import allows, category, ticket_recipients
     session = item.device.session
     return (item.device.active and session.revoked_at is None and session.expires_at > timezone.now()
             and session.user.is_active and constant_time_compare(session.password_stamp, session.user.get_session_auth_hash())
-            and memberships(session.user).filter(organization_id=item.ticket.organization_id).exclude(role='ADJUSTER').exists()
+            and ticket_recipients(item.ticket, item.kind).filter(user_id=session.user_id).exists()
             and allows(session.user_id,item.ticket.organization_id,category(item.ticket.priority,item.kind)))
 
 

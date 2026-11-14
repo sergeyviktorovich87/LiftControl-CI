@@ -355,7 +355,7 @@ class OperationalTests(TestCase):
         self.assertTrue(valid_endpoint('https://fcm.googleapis.com/fcm/send/123'))
         self.assertTrue(valid_endpoint('https://updates.push.services.mozilla.com/wpush/v2/xyz'))
 
-    def test_all_active_mechanics_receive_queued_push_without_network(self):
+    def test_only_assigned_mechanic_receives_ordinary_push_without_network(self):
         for index, user in enumerate([self.mechanic, self.mechanic2]):
             PushSubscription.objects.create(
                 organization=self.org, user=user,
@@ -365,13 +365,13 @@ class OperationalTests(TestCase):
         r=self.post('tickets/',{'title':'Fault with notification','elevator':self.lift.pk})
         self.assertEqual(r.status_code,201)
         ticket=Ticket.objects.get(pk=r.json()['id'])
-        self.assertEqual(list(PushDelivery.objects.filter(ticket=ticket).values_list('kind',flat=True)),
-                         ['created','created'])
+        self.assertEqual(list(PushDelivery.objects.filter(ticket=ticket).values_list('subscription__user_id', flat=True)),
+                         [self.mechanic.pk])
         # An inactive staff member must be omitted from future queue entries.
-        self.mechanic2.memberships.update(active=False)
+        self.mechanic.memberships.update(active=False)
         r=self.post('tickets/',{'title':'Second notification','elevator':self.lift.pk})
         self.assertEqual(r.status_code,201)
-        self.assertEqual(PushDelivery.objects.filter(ticket_id=r.json()['id']).count(),1)
+        self.assertFalse(PushDelivery.objects.filter(ticket_id=r.json()['id']).exists())
 
     def test_inactive_technician_never_receives_push(self):
         sub=PushSubscription.objects.create(

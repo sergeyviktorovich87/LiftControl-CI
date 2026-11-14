@@ -3,24 +3,32 @@
 No writable generic ModelViewSet: each mutation rechecks organization and the
 exact lift assignment. All audit/progress records are append-only.
 """
+import hashlib
+import json
 import logging
+from datetime import date
 from decimal import Decimal, InvalidOperation
+from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from django.db import transaction, IntegrityError
 from django.http import FileResponse
 from django.shortcuts import get_object_or_404
+from django.utils.http import content_disposition_header
 from django.utils import timezone
 from PIL import Image, UnidentifiedImageError
 from rest_framework.decorators import api_view, permission_classes
-from rest_framework.exceptions import PermissionDenied, ValidationError
+from rest_framework.exceptions import NotFound, PermissionDenied, ValidationError
 from rest_framework.response import Response
 
-from .access import MemberAccess, audit, org, role
+from .access import MemberAccess, audit, org, role, commissioning_access
+from .mobile_sync import SyncConflict
 from .models import (Membership, Elevator, CommissioningProject as Project,
     CommissioningLift as Lift, CommissioningAssignment as Assignment,
     CommissioningProgress as Progress, CommissioningExpense as Expense,
     CommissioningNeed as Need, CommissioningExtraWork as Extra,
-    CommissioningMessage as Message, CommissioningLiftRequest as LiftRequest)
+    CommissioningMessage as Message, CommissioningLiftRequest as LiftRequest,
+    CommissioningSyncReceipt)
 
 log = logging.getLogger(__name__)
 
@@ -35,12 +43,26 @@ def _require_manager(user):
 
 
 def _project(request, pk):
+    if not commissioning_access(request.user):
+        raise PermissionDenied('Администратор не выдал доступ к пусконаладке.')
     p = get_object_or_404(Project, pk=pk, organization=org(request.user))
     if not _manager(request.user) and not Assignment.objects.filter(
         lift__project=p, user=request.user, active=True
     ).exists():
         raise PermissionDenied('Объект наладки не назначен вам.')
     return p
+
+
+def _write_project(request, pk):
+    if not commissioning_access(request.user):
+        raise PermissionDenied('Администратор не выдал доступ к пусконаладке.')
+    project = get_object_or_404(Project.objects.select_for_update(), pk=pk, organization=org(request.user))
+    if not _manager(request.user) and not Assignment.objects.filter(
+        lift__project=project, user=request.user, active=True,
+    ).exists():
+        raise PermissionDenied('Объект наладки не назначен вам.')
+    _editable(project)
+    return project
 
 
 def _editable(project):
@@ -118,6 +140,7 @@ def _details(p, user):
     result['expenses'] = [{
         'id': e.pk, 'lift': e.lift_id, 'author': e.author.get_full_name() or e.author.username,
         'amount': str(e.amount), 'description': e.description, 'created_at': e.created_at,
+        'spent_on': e.spent_on,
         'has_receipt': bool(e.receipt), 'reimbursed_at': e.reimbursed_at,
     } for e in visible_expenses.select_related('author').order_by('-id')]
     result['needs'] = [{
@@ -142,6 +165,8 @@ def _details(p, user):
 @api_view(['GET', 'POST'])
 @permission_classes([MemberAccess])
 def projects(request):
+    if not commissioning_access(request.user):
+        raise PermissionDenied('Администратор не выдал доступ к пусконаладке.')
     if request.method == 'GET':
         projects = Project.objects.filter(organization=org(request.user))
         if not _manager(request.user):
@@ -195,16 +220,15 @@ def add_lift(request, pk):
 @transaction.atomic
 def assign(request, pk, lift_id):
     _require_manager(request.user)
-    p = _project(request, pk)
-    _editable(p)
+    p = _write_project(request, pk)
     lift = _lift(p, lift_id)
     member = get_object_or_404(Membership, organization=p.organization,
                                user_id=request.data.get('user'), active=True, user__is_active=True)
-    if member.role not in ('MECHANIC', 'ADJUSTER'):
-        raise ValidationError('Назначить можно механика или наладчика.')
     active = request.data.get('active', True)
     if not isinstance(active, bool):
         raise ValidationError('active должен быть true/false.')
+    if active and (member.role not in ('MECHANIC', 'ADJUSTER') or not member.can_commissioning):
+        raise ValidationError('Сначала выдайте доступ к пусконаладке в карточке сотрудника.')
     assignment, _ = Assignment.objects.update_or_create(
         lift=lift, user=member.user, defaults={'active': active})
     audit(request.user, 'commissioning.assignment_changed', lift.pk,
@@ -216,16 +240,19 @@ def assign(request, pk, lift_id):
 @permission_classes([MemberAccess])
 @transaction.atomic
 def update_progress(request, pk, lift_id):
-    p = _project(request, pk)
-    _editable(p)
+    p = _write_project(request, pk)
     lift = get_object_or_404(Lift.objects.select_for_update(), pk=lift_id, project=p)
     _assigned(request, lift)
-    if type(request.data.get('revision')) is not int or request.data['revision'] != lift.revision:
+    return Response(_save_progress(request, lift, request.data))
+
+
+def _save_progress(request, lift, data):
+    if type(data.get('revision')) is not int or data['revision'] != lift.revision:
         raise ValidationError({'revision': 'Прогресс уже изменён. Обновите данные перед сохранением.'})
-    value = request.data.get('progress')
+    value = data.get('progress')
     if type(value) is not int or not 0 <= value <= 100:
         raise ValidationError({'progress': 'Процент должен быть от 0 до 100.'})
-    description = _string(request.data, 'description', 4000)
+    description = _string(data, 'description', 4000)
     if value == lift.progress:
         raise ValidationError('Процент не изменился.')
     before = lift.progress
@@ -237,7 +264,7 @@ def update_progress(request, pk, lift_id):
     audit(request.user, 'commissioning.progress_changed', lift.pk,
           {'before': before, 'after': value, 'revision': lift.revision})
     log.info('commissioning_progress lift=%s revision=%s', lift.pk, lift.revision)
-    return Response({'progress': value, 'revision': lift.revision, 'event': event.pk})
+    return {'progress': value, 'revision': lift.revision, 'event': event.pk}
 
 
 @api_view(['POST'])
@@ -276,7 +303,8 @@ def decide_lift(request, pk, request_id):
             raise ValidationError('Такой лифт уже есть.')
         lift = Lift.objects.create(project=p, label=item.label, factory_number=item.factory_number)
         # Approval does not grant edit rights to any other employee.
-        if Membership.objects.filter(organization=p.organization, user=item.requested_by, active=True).exists():
+        if Membership.objects.filter(organization=p.organization, user=item.requested_by,
+                                     active=True, can_commissioning=True).exists():
             Assignment.objects.get_or_create(lift=lift, user=item.requested_by)
     item.status = 'APPROVED' if approve else 'REJECTED'
     item.reviewed_by = request.user
@@ -289,30 +317,58 @@ def decide_lift(request, pk, request_id):
 @permission_classes([MemberAccess])
 @transaction.atomic
 def add_expense(request, pk):
-    p = _project(request, pk)
-    _editable(p)
+    p = _write_project(request, pk)
+    lift = _expense_access(request, p, request.data)
+    item = _save_expense(request, p, lift, request.data)
+    return Response({'id': item.pk}, status=201)
+
+
+def _expense_access(request, project, data):
     if _manager(request.user):
         raise PermissionDenied('Личный расход вносит только его автор-наладчик.')
-    lift = _optional_lift(p, request.data)
+    lift = _optional_lift(project, data)
     if lift is not None:
         _assigned(request, lift)
-    amount = _money(request.data, 'amount')
+    return lift
+
+
+def _save_expense(request, project, lift, data):
+    amount = _money(data, 'amount')
     if amount <= 0:
         raise ValidationError('Сумма должна быть положительной.')
-    item = Expense.objects.create(organization=p.organization, project=p, lift=lift,
-                                  author=request.user, amount=amount,
-                                  description=_string(request.data, 'description', 1000))
-    audit(request.user, 'commissioning.expense_created', item.pk, {'project': p.pk})
-    return Response({'id': item.pk}, status=201)
+    spent_on = timezone.localdate(timezone=ZoneInfo(project.organization.timezone))
+    if data.get('spent_on') not in (None, ''):
+        try:
+            spent_on = date.fromisoformat(data['spent_on'])
+        except (TypeError, ValueError):
+            raise ValidationError({'spent_on': 'Укажите дату ГГГГ-ММ-ДД.'})
+    item = Expense.objects.create(
+        organization=project.organization, project=project, lift=lift,
+        author=request.user, amount=amount, spent_on=spent_on,
+        description=_string(data, 'description', 1000),
+    )
+    audit(request.user, 'commissioning.expense_created', item.pk, {'project': project.pk})
+    return item
 
 
 @api_view(['POST'])
 @permission_classes([MemberAccess])
 @transaction.atomic
 def upload_receipt(request, pk, expense_id):
-    p = _project(request, pk)
-    _editable(p)
+    p = _write_project(request, pk)
     uploaded = request.FILES.get('receipt')
+    image_format = _receipt_format(uploaded)
+    item = get_object_or_404(Expense.objects.select_for_update(),
+                             pk=expense_id, project=p, author=request.user)
+    if item.lift_id:
+        _assigned(request, item.lift)
+    if item.receipt:
+        raise ValidationError('Чек уже прикреплён. Исходный файл не заменяется.')
+    _save_receipt(request, item, uploaded, image_format)
+    return Response({'ok': True}, status=201)
+
+
+def _receipt_format(uploaded):
     if not uploaded or uploaded.size > 10 * 1024 * 1024:
         raise ValidationError('Требуется фото чека до 10 МБ.')
     try:
@@ -326,13 +382,12 @@ def upload_receipt(request, pk, expense_id):
         raise ValidationError('Файл не является безопасным изображением.')
     if image_format not in ('JPEG', 'PNG', 'WEBP'):
         raise ValidationError('Допустимы JPEG, PNG или WebP.')
-    item = get_object_or_404(Expense.objects.select_for_update(),
-                             pk=expense_id, project=p, author=request.user)
-    if item.receipt:
-        raise ValidationError('Чек уже прикреплён. Исходный файл не заменяется.')
+    return image_format
+
+
+def _save_receipt(request, item, uploaded, image_format):
     item.receipt.save('receipt.' + image_format.lower(), uploaded, save=True)
     audit(request.user, 'commissioning.receipt_uploaded', item.pk)
-    return Response({'ok': True}, status=201)
 
 
 @api_view(['GET'])
@@ -345,10 +400,17 @@ def receipt(request, pk, expense_id):
     if not item.receipt:
         raise ValidationError('Фото чека отсутствует.')
     extension = item.receipt.name.rsplit('.', 1)[-1].lower()
-    if extension not in ('jpeg', 'jpg', 'png', 'webp'):
-        extension = 'jpg'
-    response = FileResponse(item.receipt.open('rb'), as_attachment=True,
-                            filename=f'receipt-{item.pk}.{extension}')
+    mime = {'jpeg': 'image/jpeg', 'jpg': 'image/jpeg', 'png': 'image/png', 'webp': 'image/webp'}
+    try:
+        if extension not in mime:
+            # Existing FileField names were UUIDs without a suffix.
+            with item.receipt.open('rb') as file:
+                with Image.open(file) as image:
+                    extension = image.format.lower()
+        response = FileResponse(item.receipt.open('rb'), content_type=mime[extension])
+    except (FileNotFoundError, UnidentifiedImageError, AttributeError, KeyError):
+        raise NotFound('Фото чека недоступно.')
+    response['Content-Disposition'] = content_disposition_header(True, f'receipt-{item.pk}.{extension}')
     response['Cache-Control'] = 'no-store, private'
     response['X-Content-Type-Options'] = 'nosniff'
     return response
@@ -448,16 +510,101 @@ def decide_extra(request, pk, extra_id):
 
 @api_view(['POST'])
 @permission_classes([MemberAccess])
+@transaction.atomic
 def send_message(request, pk):
-    p = _project(request, pk)
-    _editable(p)
-    item = Message.objects.create(project=p, author=request.user,
-                                  text=_string(request.data, 'text', 4000))
+    return Response({'id': _save_message(request, _write_project(request, pk), request.data)}, status=201)
+
+
+def _save_message(request, project, data):
+    item = Message.objects.create(project=project, author=request.user,
+                                  text=_string(data, 'text', 4000))
     # A message is never a legal/financial approval.
     from .notification_inbox import enqueue_commissioning_message
     enqueue_commissioning_message(item)
-    log.info('commissioning_message_created project=%s id=%s', p.pk, item.pk)
-    return Response({'id': item.pk}, status=201)
+    log.info('commissioning_message_created project=%s id=%s', project.pk, item.pk)
+    return item.pk
+
+
+@api_view(['POST'])
+@permission_classes([MemberAccess])
+def sync_record(request, pk):
+    """Replay the existing writes, with a durable receipt and fresh access checks."""
+    try:
+        command = request.data if not request.FILES else json.loads(request.data['command'])
+        if not isinstance(command, dict) or not isinstance(command.get('body'), dict):
+            raise ValueError()
+        operation_id = UUID(command['id'])
+        kind, body = command['type'], command['body']
+        if kind not in ('progress', 'expense', 'receipt', 'message'):
+            raise ValueError()
+    except (ValueError, TypeError, KeyError, AttributeError):
+        raise ValidationError('Некорректная запись наладки.')
+    uploaded = request.FILES.get('receipt')
+    if request.FILES and (not uploaded or kind not in ('expense', 'receipt')):
+        raise ValidationError('Фото можно прикрепить только к личному расходу.')
+    digest = ''
+    image_format = None
+    if uploaded:
+        image_format = _receipt_format(uploaded)
+        digest = hashlib.file_digest(uploaded, 'sha256').hexdigest()
+        uploaded.seek(0)
+    fingerprint = hashlib.sha256(json.dumps(
+        [pk, kind, body, digest], sort_keys=True, ensure_ascii=False,
+    ).encode()).hexdigest()
+    item = None
+    try:
+        with transaction.atomic():
+            project = _write_project(request, pk)
+            lift = expense = None
+            if kind == 'progress':
+                if type(body.get('lift')) is not int:
+                    raise ValidationError('Укажите лифт.')
+                lift = _lift(project, body['lift'])
+                _assigned(request, lift)
+            elif kind == 'expense':
+                lift = _expense_access(request, project, body)
+            elif kind == 'receipt':
+                if not uploaded or type(body.get('expense')) is not int:
+                    raise ValidationError('Укажите личный расход и прикрепите фото.')
+                expense = get_object_or_404(Expense.objects.select_for_update(),
+                                            project=project, pk=body['expense'], author=request.user)
+                if expense.lift_id:
+                    _assigned(request, expense.lift)
+            # Serialize operation IDs across projects for a single account.
+            type(request.user).objects.select_for_update(no_key=True).get(pk=request.user.pk)
+            saved = CommissioningSyncReceipt.objects.filter(
+                organization=project.organization, user=request.user, operation_id=operation_id,
+            ).first()
+            if saved:
+                if saved.payload_hash != fingerprint:
+                    raise SyncConflict()
+                return Response({'operation_id': str(operation_id), 'result': saved.result, 'replayed': True})
+            if kind == 'progress':
+                result = _save_progress(request, lift, body)
+            elif kind == 'message':
+                result = {'id': _save_message(request, project, body)}
+            else:
+                item = expense if expense is not None else _save_expense(request, project, lift, body)
+                if uploaded:
+                    if item.receipt:
+                        item = None
+                        raise ValidationError('Чек уже прикреплён.')
+                    _save_receipt(request, item, uploaded, image_format)
+                result = {'id': item.pk}
+            CommissioningSyncReceipt.objects.create(
+                organization=project.organization, user=request.user, operation_id=operation_id,
+                payload_hash=fingerprint, result=result,
+            )
+    except Exception:
+        if item and item.receipt:
+            try:
+                if not Expense.objects.filter(receipt=item.receipt.name).exists():
+                    item.receipt.delete(save=False)
+            except Exception:
+                log.warning('commissioning_receipt_cleanup_failed')
+        raise
+    log.info('commissioning_sync_saved')
+    return Response({'operation_id': str(operation_id), 'result': result, 'replayed': False}, status=201)
 
 
 @api_view(['POST'])

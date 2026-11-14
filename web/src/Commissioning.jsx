@@ -1,5 +1,6 @@
 import React, {useEffect, useState} from 'react';
 import {api} from './api';
+import {compressImage} from './imageCompression';
 
 /** 0.13 commissioning workspace. All authorization lives on Django, not JSX. */
 export default function Commissioning({user}) {
@@ -11,6 +12,8 @@ export default function Commissioning({user}) {
   const [progress,setProgress]=useState({}),[description,setDescription]=useState({});
   const [expenseAmount,setExpenseAmount]=useState(''),[expenseText,setExpenseText]=useState('');
   const [expenseLift,setExpenseLift]=useState(''),[receipt,setReceipt]=useState(null);
+  const [expenseDate,setExpenseDate]=useState(()=>new Intl.DateTimeFormat('en-CA',{timeZone:user.timezone,year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date()));
+  const [expenseOperation,setExpenseOperation]=useState(null);
   const [needText,setNeedText]=useState(''),[needKind,setNeedKind]=useState('OTHER'),[blocking,setBlocking]=useState(false);
   const [extraText,setExtraText]=useState(''),[extraPrice,setExtraPrice]=useState('0');
   const [message,setMessage]=useState(''),[requestLabel,setRequestLabel]=useState('');
@@ -23,9 +26,9 @@ export default function Commissioning({user}) {
   async function openProject(id) {setSelected(await api('commissioning/'+id+'/'));}
   useEffect(()=> {
     let alive=true;
-    setSelected(null);setProjects([]);setError('');
+    setSelected(null);setProjects([]);setError('');setExpenseOperation(null);
     api('commissioning/').then(rows=>{if(alive)setProjects(rows);}).catch(e=>{if(alive)setError(e.message);});
-    if(canManage)api('organizations/members/').then(rows=>{if(alive)setMembers(rows.filter(m=>m.active&&['ADJUSTER','MECHANIC'].includes(m.role)));}).catch(()=>{});
+    if(canManage)api('organizations/members/').then(rows=>{if(alive)setMembers(rows.filter(m=>m.active&&m.can_commissioning&&['ADJUSTER','MECHANIC'].includes(m.role)));}).catch(()=>{});
     return()=>{alive=false;};
   },[user.organization_id,canManage]);
   async function run(action,{refresh=true}={}) {
@@ -43,11 +46,11 @@ export default function Commissioning({user}) {
     return <label className="field">{label}<input type={type} required={required} value={value} onChange={e=>set(e.target.value)}/></label>;
   }
   function liftOption(value,set) {
-    return <label className="field">Лифт<select value={value} onChange={e=>set(e.target.value)}><option value="">Весь объект</option>{selected?.lifts?.map(l=><option value={l.id} key={l.id}>{l.label}</option>)}</select></label>;
+    return <label className="field">Лифт<select value={value} onChange={e=>set(e.target.value)}><option value="">Весь объект</option>{selected?.lifts?.filter(l=>l.can_edit).map(l=><option value={l.id} key={l.id}>{l.label}</option>)}</select></label>;
   }
   return <div className="commissioning">
-    <div className="page-heading"><div><span className="eyebrow">ПУСКОНАЛАДКА · 0.13</span><h1>Объекты наладки</h1>
-      <p>Совместная картина объекта, персональная ответственность за лифты и приватные расходы.</p></div>
+    <div className="page-heading"><div><h1>Объекты наладки</h1>
+      </div>
       <button disabled={busy} onClick={()=>run(async()=>{await loadList();if(selected)await openProject(selected.id);},{refresh:false})}>Обновить</button></div>
     {error&&<div className="error" role="alert">{error}</div>}
     {canManage&&<form className="panel" style={{padding:18,display:'grid',gap:12,marginBottom:18}} onSubmit={e=>{e.preventDefault();run(async()=>{
@@ -132,18 +135,30 @@ export default function Commissioning({user}) {
         <h2>{canManage?'Расходы наладчиков':'Мои личные расходы'}</h2>
         <p className="muted">Участники общего объекта не видят чужие личные расходы и чеки.</p>
         {selected.expenses.map(e=><div className="list-row" key={e.id}>
-          <span><b>{e.amount} ₽ · {e.description}</b><small>{e.author} · {new Date(e.created_at).toLocaleDateString('ru-RU')}</small></span>
+          <span><b>{e.amount} ₽ · {e.description}</b><small>{e.author} · {e.spent_on?e.spent_on.split('-').reverse().join('.'):new Date(e.created_at).toLocaleDateString('ru-RU')}</small></span>
           {e.has_receipt&&<a className="button" href={`/api/commissioning/${selected.id}/expenses/${e.id}/receipt/`}>Чек</a>}
           {canManage&&!e.reimbursed_at&&!selected.archived&&<button onClick={()=>run(()=>post(`commissioning/${selected.id}/expenses/${e.id}/reimburse/`,{}))}>Возместить</button>}
         </div>)}
         {!canManage&&!selected.archived&&<form className="form-grid" style={{marginTop:12}} onSubmit={e=>{e.preventDefault();run(async()=>{
-          const created=await post(`commissioning/${selected.id}/expenses/`,{amount:expenseAmount,description:expenseText,lift:expenseLift?Number(expenseLift):null});
-          if(receipt){const form=new FormData();form.append('receipt',receipt);await api(`commissioning/${selected.id}/expenses/${created.id}/upload/`,{method:'POST',body:form});}
-          setExpenseAmount('');setExpenseText('');setReceipt(null);
+          let saved=expenseOperation?.project===selected.id?expenseOperation:null;
+          if(!saved){
+            const command={id:crypto.randomUUID(),type:'expense',body:{amount:expenseAmount,description:expenseText,lift:expenseLift?Number(expenseLift):null,spent_on:expenseDate}};
+            const image=receipt?await compressImage(receipt):null;
+            saved={command,image,project:selected.id};setExpenseOperation(saved);
+          }
+          let body=saved.command;
+          if(saved.image){body=new FormData();body.append('command',JSON.stringify(saved.command));body.append('receipt',saved.image);}
+          try{await post(`commissioning/${selected.id}/sync/`,body);}
+          catch(err){if(err.status>=400&&err.status<500)setExpenseOperation(null);throw err;}
+          setExpenseAmount('');setExpenseText('');setReceipt(null);setExpenseOperation(null);
         });}}>
-          {field('Сумма, ₽',expenseAmount,setExpenseAmount,'number')}{field('Описание расхода',expenseText,setExpenseText)}
-          {liftOption(expenseLift,setExpenseLift)}
-          <label className="field">Фото чека <input type="file" accept="image/jpeg,image/png,image/webp" onChange={e=>setReceipt(e.target.files?.[0]||null)}/></label>
+          <fieldset className="form-grid" disabled={busy||expenseOperation?.project===selected.id}>
+            <label className="field">Сумма, ₽<input type="number" min="0.01" step="0.01" required value={expenseAmount} onChange={e=>setExpenseAmount(e.target.value)}/></label>
+            {field('Описание расхода',expenseText,setExpenseText)}
+            {field('Дата расхода',expenseDate,setExpenseDate,'date')}
+            {liftOption(expenseLift,setExpenseLift)}
+            <label className="field">Фото чека <input type="file" accept="image/jpeg,image/png,image/webp" onChange={e=>setReceipt(e.target.files?.[0]||null)}/></label>
+          </fieldset>
           <button disabled={busy||!expenseAmount||!expenseText.trim()}>Записать расход</button>
         </form>}
       </section>

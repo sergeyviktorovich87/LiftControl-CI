@@ -57,6 +57,7 @@ class SyncQueuePage extends StatelessWidget {
                             'comment': 'Комментарий',
                             'photo': 'Фотография',
                             'media': 'Фото / видео / сообщение',
+                            'commissioning': 'Наладка',
                           }[row['command']['type']] ??
                           'Запись',
                     ),

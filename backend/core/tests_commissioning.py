@@ -1,6 +1,7 @@
 """Commissioning security, tenant isolation, progress race and expense regressions."""
 import io
 import tempfile
+from uuid import uuid4
 
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -28,8 +29,8 @@ class CommissioningTests(TestCase):
         self.b = User.objects.create_user(username='adjuster-b', password='VeryStrong13Password!')
         self.stranger = User.objects.create_user(username='third-company', password='VeryStrong13Password!')
         Membership.objects.create(organization=self.org, user=self.admin, role='ADMIN')
-        Membership.objects.create(organization=self.org, user=self.a, role='ADJUSTER')
-        Membership.objects.create(organization=self.org, user=self.b, role='ADJUSTER')
+        Membership.objects.create(organization=self.org, user=self.a, role='ADJUSTER', can_commissioning=True)
+        Membership.objects.create(organization=self.org, user=self.b, role='ADJUSTER', can_commissioning=True)
         Membership.objects.create(organization=self.foreign, user=self.stranger, role='ADMIN')
         self.project = CommissioningProject.objects.create(
             organization=self.org, name='ЖК', address='Первый 1', created_by=self.admin)
@@ -100,7 +101,7 @@ class CommissioningTests(TestCase):
         self.assertIn(self.request(self.a, 'get', uri, tenant=self.foreign).status_code, (403, 404))
         User = get_user_model()
         outsider = User.objects.create_user(username='unassigned-13', password='VeryStrong13Password!')
-        Membership.objects.create(user=outsider, organization=self.org, role='ADJUSTER')
+        Membership.objects.create(user=outsider, organization=self.org, role='ADJUSTER', can_commissioning=True)
         self.assertEqual(self.request(outsider, 'get', 'commissioning/').data, [])
         self.assertEqual(self.request(outsider, 'get', uri).status_code, 403)
 
@@ -153,3 +154,57 @@ class CommissioningTests(TestCase):
         self.assertEqual(self.request(self.a, 'post', f'commissioning/{p}/messages/',
             {'text': 'После архива'}).status_code, 400)
         self.assertEqual(self.request(self.a, 'get', f'commissioning/{p}/').status_code, 200)
+
+    def test_offline_progress_replays_without_duplicate_and_rechecks_assignment(self):
+        path = f'commissioning/{self.project.pk}/sync/'
+        command = {'id': str(uuid4()), 'type': 'progress', 'body': {
+            'lift': self.lift_a.pk, 'revision': 0, 'progress': 34, 'description': 'Осмотр',
+        }}
+        first = self.request(self.a, 'post', path, command)
+        self.assertEqual(first.status_code, 201, first.data)
+        replay = self.request(self.a, 'post', path, command)
+        self.assertTrue(replay.data['replayed'])
+        self.assertEqual(first.data['result'], replay.data['result'])
+        self.assertEqual(CommissioningProgress.objects.filter(lift=self.lift_a).count(), 1)
+        command['body']['progress'] = 89
+        self.assertEqual(self.request(self.a, 'post', path, command).status_code, 409)
+        CommissioningAssignment.objects.filter(lift=self.lift_a, user=self.a).update(active=False)
+        self.assertEqual(self.request(self.a, 'post', path, command).status_code, 403)
+
+    def test_revoking_module_permission_preserves_assignment_and_hides_project(self):
+        member = Membership.objects.get(user=self.a, organization=self.org)
+        self.assertEqual(self.request(self.a, 'get', 'commissioning/').status_code, 200)
+        self.client.force_authenticate(self.admin)
+        result = self.client.patch(
+            f'/api/organizations/members/{member.pk}/', {'can_commissioning': False},
+            format='json', HTTP_X_ORGANIZATION_ID=str(self.org.pk),
+        )
+        self.assertEqual(result.status_code, 200, result.data)
+        self.assertFalse(self.request(self.a, 'get', 'me/').data['can_commissioning'])
+        self.assertEqual(self.request(self.a, 'get', 'commissioning/').status_code, 403)
+        self.assertTrue(CommissioningAssignment.objects.filter(lift=self.lift_a, user=self.a).exists())
+
+    def test_offline_expense_and_receipt_commit_together_without_duplicates(self):
+        import json
+
+        path = f'commissioning/{self.project.pk}/sync/'
+        command = json.dumps({'id': str(uuid4()), 'type': 'expense', 'body': {
+            'lift': self.lift_a.pk, 'spent_on': '2026-11-10',
+            'amount': '210.35', 'description': 'Клеммы',
+        }})
+        stream = io.BytesIO()
+        Image.new('RGB', (8, 8)).save(stream, format='PNG')
+        for n in range(2):
+            photo = SimpleUploadedFile('receipt.png', stream.getvalue(), content_type='image/png')
+            result = self.request(self.a, 'post', path, {'command': command, 'receipt': photo},
+                                  format='multipart')
+            self.assertEqual(result.status_code, 201 if not n else 200, result.data)
+        self.assertEqual(CommissioningExpense.objects.count(), 1)
+        expense = CommissioningExpense.objects.get()
+        self.assertEqual(expense.spent_on.isoformat(), '2026-11-10')
+        self.assertTrue(expense.receipt.storage.exists(expense.receipt.name))
+        url = f'commissioning/{self.project.pk}/expenses/{expense.pk}/receipt/'
+        self.assertEqual(self.request(self.b, 'get', url).status_code, 403)
+        downloaded = self.request(self.admin, 'get', url)
+        self.assertEqual(downloaded.status_code, 200)
+        self.assertEqual(downloaded['Content-Type'], 'image/png')

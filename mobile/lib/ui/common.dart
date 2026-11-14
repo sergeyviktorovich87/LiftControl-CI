@@ -96,27 +96,38 @@ String dateLabel(dynamic value, int offset, {bool time = true}) {
   return '${day.day} ${months[day.month - 1]}${time && raw.length > 10 ? ', $hm' : ''}';
 }
 
-ThemeData liftTheme(bool dark) {
-  final scheme =
-      ColorScheme.fromSeed(
-        seedColor: green,
-        brightness: dark ? Brightness.dark : Brightness.light,
-      ).copyWith(
-        primary: dark ? const Color(0xFF79C69B) : green,
-        surface: dark ? const Color(0xFF1A2922) : Colors.white,
-        onSurface: dark ? const Color(0xFFE7F0E9) : const Color(0xFF24362F),
-        outlineVariant: dark
-            ? const Color(0xFF33463B)
-            : const Color(0xFFE1E7E2),
-      );
+ThemeData liftTheme(bool dark, {String appearance = 'light'}) {
+  final accent = const {
+    'blue': Color(0xFF28589D),
+    'graphite': Color(0xFF475569),
+    'green': Color(0xFF2B6C33),
+    'purple': Color(0xFF6E4199),
+  }[appearance];
+  final generated = ColorScheme.fromSeed(
+    seedColor: accent ?? green,
+    brightness: dark ? Brightness.dark : Brightness.light,
+  );
+  final scheme = accent != null
+      ? generated
+      : generated.copyWith(
+          primary: dark ? const Color(0xFF79C69B) : green,
+          surface: dark ? const Color(0xFF1A2922) : Colors.white,
+          onSurface: dark ? const Color(0xFFE7F0E9) : const Color(0xFF24362F),
+          outlineVariant: dark
+              ? const Color(0xFF33463B)
+              : const Color(0xFFE1E7E2),
+        );
+  final background = accent != null
+      ? scheme.surfaceContainerLow
+      : dark
+      ? const Color(0xFF101B17)
+      : const Color(0xFFF2F5F3);
   return ThemeData(
     useMaterial3: true,
     colorScheme: scheme,
-    scaffoldBackgroundColor: dark
-        ? const Color(0xFF101B17)
-        : const Color(0xFFF2F5F3),
+    scaffoldBackgroundColor: background,
     appBarTheme: AppBarTheme(
-      backgroundColor: dark ? const Color(0xFF101B17) : const Color(0xFFF2F5F3),
+      backgroundColor: background,
       surfaceTintColor: Colors.transparent,
       centerTitle: false,
     ),
@@ -130,7 +141,11 @@ ThemeData liftTheme(bool dark) {
     ),
     inputDecorationTheme: InputDecorationTheme(
       filled: true,
-      fillColor: dark ? const Color(0xFF203128) : Colors.white,
+      fillColor: accent != null
+          ? scheme.surface
+          : dark
+          ? const Color(0xFF203128)
+          : Colors.white,
       border: OutlineInputBorder(
         borderRadius: BorderRadius.circular(14),
         borderSide: BorderSide(color: scheme.outlineVariant),

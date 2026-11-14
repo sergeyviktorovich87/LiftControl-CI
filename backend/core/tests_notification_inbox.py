@@ -17,7 +17,7 @@ class NotificationInboxTests(TestCase):
         self.adjuster=User.objects.create_user(username='notice-c13',password='VeryStrongPass13!')
         Membership.objects.create(organization=self.org,user=self.user,role='ADMIN')
         Membership.objects.create(organization=self.org,user=self.other,role='ADMIN')
-        Membership.objects.create(organization=self.org,user=self.adjuster,role='ADJUSTER')
+        Membership.objects.create(organization=self.org,user=self.adjuster,role='ADJUSTER', can_commissioning=True)
         self.client=APIClient()
 
     def request(self,user,method,path,body=None):

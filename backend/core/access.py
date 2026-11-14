@@ -68,6 +68,13 @@ def admin_user(user):
     return role(user) == 'ADMIN'
 
 
+def commissioning_access(user):
+    if user.is_superuser:
+        return True
+    m = membership(user)
+    return bool(m and (m.role in ('ADMIN', 'DIRECTOR') or m.can_commissioning))
+
+
 def technician_id(user):
     m = membership(user)
     return m.technician_id if m else None

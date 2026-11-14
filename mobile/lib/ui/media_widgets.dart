@@ -104,7 +104,7 @@ class _PrivateMediaState extends State<PrivateMedia> {
                     )
                   : null,
               onTap:
-                  (widget.controller.canWrite ||
+                  (widget.controller.loggedIn ||
                           widget.attachment['pending'] == true) &&
                       !_busy
                   ? _play

@@ -170,6 +170,8 @@ class FieldOperationsTests(TestCase):
         self.assertEqual(category('ENTRAPMENT','completed'),'updates')
     def test_entrapment_is_a_valid_priority_and_is_present_in_private_push_payload(self):
         device=self.native_device(self.worker)
+        self.lift.assigned_technician = self.tech
+        self.lift.save(update_fields=['assigned_technician'])
         response=self.client.post('/api/tickets/',{'elevator':self.lift.pk,'title':'Люди в кабине','priority':'ENTRAPMENT'},format='json')
         self.assertEqual(response.status_code,201,response.data)
         delivery=NativePushDelivery.objects.get(device=device,ticket_id=response.data['id'])

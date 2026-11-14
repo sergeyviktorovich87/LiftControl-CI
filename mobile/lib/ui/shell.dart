@@ -100,13 +100,17 @@ class _LiftShellState extends State<LiftShell> with WidgetsBindingObserver {
     _updateDialogOpen = true;
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted) return;
+      final notes = text(release, 'notes', '').trim();
       c.log.record('update_prompt_shown');
       final install = await showDialog<bool>(
         context: context,
         builder: (context) => AlertDialog(
           title: const Text('Доступно обновление'),
-          content: Text(
-            'Новая версия LiftControl ${release['version']}. Обновить приложение?',
+          content: SingleChildScrollView(
+            child: Text(
+              'Новая версия LiftControl ${release['version']}. Обновить приложение?'
+              '${notes.isEmpty ? '' : '\n\n$notes'}',
+            ),
           ),
           actions: [
             TextButton(
@@ -254,17 +258,27 @@ class _LiftShellState extends State<LiftShell> with WidgetsBindingObserver {
     builder: (context, box) {
       final wide = box.maxWidth >= 760;
       final commissionedOnly = c.me['commissioning_only'] == true;
-      final navIndex = commissionedOnly && _index > 1 ? 1 : _index;
-      final navLabels = commissionedOnly ? const ['Наладка', 'Ещё'] : labels;
-      final navIcons = commissionedOnly
+      final hasCommissioning = c.me['can_commissioning'] == true;
+      final navIndex = commissionedOnly
+          ? (hasCommissioning && _index > 0 ? 1 : 0)
+          : _index;
+      final navLabels = commissionedOnly
+          ? (hasCommissioning ? const ['Наладка', 'Ещё'] : const ['Ещё'])
+          : labels;
+      final navIcons = commissionedOnly && !hasCommissioning
+          ? const [Icons.more_horiz]
+          : commissionedOnly
           ? const [Icons.precision_manufacturing_outlined, Icons.more_horiz]
           : icons;
       final page = c.organization == null
           ? _NoOrganization(c: c, onSelect: _organization)
           : commissionedOnly
-          ? (navIndex == 0
-              ? CommissioningPage(key: ValueKey(c.organization), controller: c)
-              : MorePage(controller: c))
+          ? (navIndex == 0 && hasCommissioning
+                ? CommissioningPage(
+                    key: ValueKey(c.organization),
+                    controller: c,
+                  )
+                : MorePage(controller: c))
           : switch (_index) {
               0 => HomePage(
                 controller: c,
@@ -312,18 +326,19 @@ class _LiftShellState extends State<LiftShell> with WidgetsBindingObserver {
             ],
           ),
           actions: [
-            if (!commissionedOnly) IconButton(
-              tooltip: 'Чат бригады',
-              onPressed: c.organization == null
-                  ? null
-                  : () => Navigator.push(
-                      context,
-                      MaterialPageRoute<void>(
-                        builder: (_) => ChatPage(controller: c),
+            if (!commissionedOnly)
+              IconButton(
+                tooltip: 'Чат бригады',
+                onPressed: c.organization == null
+                    ? null
+                    : () => Navigator.push(
+                        context,
+                        MaterialPageRoute<void>(
+                          builder: (_) => ChatPage(controller: c),
+                        ),
                       ),
-                    ),
-              icon: const Icon(Icons.chat_bubble_outline),
-            ),
+                icon: const Icon(Icons.chat_bubble_outline),
+              ),
             IconButton(
               tooltip: 'Обновить',
               onPressed: c.refreshing ? null : c.refresh,
@@ -407,7 +422,7 @@ class _LiftShellState extends State<LiftShell> with WidgetsBindingObserver {
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  if (wide)
+                  if (wide && navLabels.length > 1)
                     Container(
                       color: forest,
                       child: NavigationRail(
@@ -448,7 +463,7 @@ class _LiftShellState extends State<LiftShell> with WidgetsBindingObserver {
             ),
           ],
         ),
-        bottomNavigationBar: wide
+        bottomNavigationBar: wide || navLabels.length < 2
             ? null
             : NavigationBar(
                 selectedIndex: navIndex,

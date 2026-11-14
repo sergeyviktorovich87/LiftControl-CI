@@ -34,6 +34,9 @@ class LiftController extends ChangeNotifier {
   final http.Client? transport;
   final Outbox outbox;
   final PendingMediaFiles mediaFiles;
+  final DownloadCache _downloadCache = DownloadCache();
+  int cacheLimit = 100;
+  static const cacheLimits = [100, 500, 1024];
   List<Json> _outboxRows = [];
   final Map<int, int> _resolvedTickets = {};
   Future<void>? _syncFuture;
@@ -65,11 +68,19 @@ class LiftController extends ChangeNotifier {
   Json snapshot = {};
   List<Json> organizations = [];
   int? organization;
-  bool starting = true,
-      refreshing = false,
-      online = false,
-      demo = false,
-      dark = false;
+  bool starting = true, refreshing = false, online = false, demo = false;
+  String appearance = 'light';
+  static const appearances = [
+    'light',
+    'dark',
+    'auto',
+    'blue',
+    'graphite',
+    'green',
+    'purple',
+  ];
+  bool get dark => appearance == 'dark' || appearance == 'graphite';
+  set dark(bool value) => appearance = value ? 'dark' : 'light';
   String serverText = '', error = '';
   DateTime? syncedAt;
   int _generation = 0;
@@ -85,6 +96,7 @@ class LiftController extends ChangeNotifier {
   Future<Json?>? _updatesFuture;
   Json? updates;
   int updateCheckSerial = 0;
+  int syncRevision = 0;
   int? installedVersionCode;
   bool get hasUpdate =>
       updates?['android'] is Map &&
@@ -95,7 +107,6 @@ class LiftController extends ChangeNotifier {
   SelfPushPoller? _selfPushPoller;
   int? _selfPushGeneration;
   int? _selfPushOrg;
-
 
   bool get loggedIn => session != null || demo;
   bool get canWrite => online && !demo && session != null;
@@ -109,7 +120,7 @@ class LiftController extends ChangeNotifier {
     final tickets = {for (final row in base) row['id'] as int: row};
     for (final row in _outboxRows) {
       final command = Map<String, dynamic>.from(row['command'] as Map);
-      if (command['type'] == 'media') continue;
+      if (['media', 'commissioning'].contains(command['type'])) continue;
       final response = row['response'];
       if (row['state'] == 'synced' &&
           response is Map &&
@@ -237,7 +248,11 @@ class LiftController extends ChangeNotifier {
       throw const ApiError('Обновите сервер и загрузите данные организации.');
     }
     if (!['chat', 'ticket', 'elevator', 'task', 'library'].contains(kind) ||
-        (files.isEmpty && (kind != 'chat' || (body.trim().isEmpty && linkedTicket == null && linkedPart == null))) ||
+        (files.isEmpty &&
+            (kind != 'chat' ||
+                (body.trim().isEmpty &&
+                    linkedTicket == null &&
+                    linkedPart == null))) ||
         (['ticket', 'elevator', 'task'].contains(kind) &&
             (target == null || target <= 0))) {
       throw const ApiError('Выберите файл и место его сохранения.');
@@ -309,6 +324,98 @@ class LiftController extends ChangeNotifier {
       throw const ApiError('Нет доступа к файлу этой организации.');
     }
     return mediaFiles.read(key, id);
+  }
+
+  bool get canRecordCommissioning =>
+      canRecord &&
+      me['commissioning_sync_api'] == 1 &&
+      me['can_commissioning'] == true;
+
+  Future<void> queueCommissioning(
+    int project,
+    String kind,
+    Json data, {
+    required int expectedOrganization,
+    Uint8List? receipt,
+  }) async {
+    if (!canRecordCommissioning || organization != expectedOrganization) {
+      throw const ApiError(
+        'Обновите данные организации и откройте объект заново.',
+      );
+    }
+    if (receipt != null &&
+        (receipt.isEmpty || receipt.length > 10 * 1024 * 1024)) {
+      throw const ApiError('Фото чека должно быть до 10 МБ.');
+    }
+    final id = _operationId(), key = scope, captured = _generation;
+    final body = {...data};
+    if (kind == 'expense') {
+      body['spent_on'] ??= orgNow.toIso8601String().substring(0, 10);
+    }
+    if (receipt != null) {
+      await mediaFiles.stage(key, id, receipt);
+    }
+    try {
+      if (captured != _generation) {
+        throw const ApiError('Организация изменилась. Откройте объект заново.');
+      }
+      await outbox.enqueue(key, [
+        {
+          'id': id,
+          'commissioning_project': project,
+          if (receipt != null) 'file_id': id,
+          'command': {
+            'id': id,
+            'type': 'commissioning',
+            'action': kind,
+            'body': body,
+          },
+          'local_ticket': {
+            'title': switch (kind) {
+              'progress' => 'Прогресс наладки',
+              'expense' => 'Личный расход',
+              'receipt' => 'Фото чека',
+              _ => 'Сообщение по наладке',
+            },
+            'address': 'Наладка',
+            'elevator_label': 'Объект #$project',
+          },
+        },
+      ]);
+    } catch (_) {
+      if (receipt != null) await mediaFiles.remove(key, id);
+      log.record('commissioning_queue_failed');
+      rethrow;
+    }
+    log.record('commissioning_queued');
+    if (captured == _generation) {
+      await _loadOutbox();
+      notifyListeners();
+      unawaited(refresh());
+    }
+  }
+
+  Future<dynamic> _sendCommissioning(
+    ApiClient api,
+    String key,
+    Json row,
+  ) async {
+    final saved = row['command'] as Map;
+    final command = <String, dynamic>{
+      'id': row['id'],
+      'type': saved['action'],
+      'body': saved['body'],
+    };
+    final route = 'commissioning/${row['commissioning_project']}/sync/';
+    final file = row['file_id'] as String?;
+    return file == null
+        ? api.call(route, method: 'POST', data: command)
+        : api.uploadMedia(
+            route,
+            [(bytes: await mediaFiles.read(key, file), name: 'receipt.jpg')],
+            field: 'receipt',
+            fields: {'command': jsonEncode(command)},
+          );
   }
 
   List<Json> _chatWithPending(List<Json> base) {
@@ -425,7 +532,14 @@ class LiftController extends ChangeNotifier {
       serverText =
           await store.read('server') ??
           const String.fromEnvironment('API_SERVER');
-      dark = await store.read('theme') == 'dark';
+      final savedAppearance = await store.read('theme');
+      appearance = appearances.contains(savedAppearance)
+          ? savedAppearance!
+          : 'light';
+      final limit = int.tryParse(
+        await store.read('download_cache_limit') ?? '',
+      );
+      cacheLimit = cacheLimits.contains(limit) ? limit! : 100;
       final saved = await store.read('session');
       if (saved != null) {
         final value = Map<String, dynamic>.from(jsonDecode(saved));
@@ -646,7 +760,10 @@ class LiftController extends ChangeNotifier {
           for (final row in await outbox.rows(key)) {
             if (captured != _generation) break;
             final command = Map<String, dynamic>.from(row['command']);
-            final target = (command['ticket'] ?? row['local_id']) as int;
+            final commissioning = command['type'] == 'commissioning';
+            final target = commissioning
+                ? -(2000000000 + (row['commissioning_project'] as int))
+                : (command['ticket'] ?? row['local_id']) as int;
             if (row['state'] == 'failed') {
               blocked.add(target);
               continue;
@@ -655,7 +772,9 @@ class LiftController extends ChangeNotifier {
             try {
               final media = command['type'] == 'media';
               final response = Map<String, dynamic>.from(
-                media
+                commissioning
+                    ? await _sendCommissioning(api, key, row)
+                    : media
                     ? await _sendMedia(api, key, row)
                     : await api.call(
                         'mobile/sync/',
@@ -664,7 +783,9 @@ class LiftController extends ChangeNotifier {
                       ),
               );
               if (response['operation_id'] != row['id'] ||
-                  (media
+                  (commissioning
+                      ? response['result'] is! Map
+                      : media
                       ? response['state'] != 'READY' ||
                             response['asset'] == null &&
                                 response['message'] is! int
@@ -955,16 +1076,26 @@ class LiftController extends ChangeNotifier {
       final profile = await api.call('me/');
       if (captured != _generation) return;
       if (profile is Map && profile['commissioning_only'] == true) {
-        final projects = await api.call('commissioning/');
+        final projects = profile['can_commissioning'] == true
+            ? await api.call('commissioning/')
+            : <Json>[];
+        if (profile['can_commissioning'] != true) {
+          _resources = {};
+          await _write(captured, 'resources_$currentScope', '{}');
+        }
         if (captured != _generation) return;
         snapshot = {'me': profile, 'commissioning': projects};
         organizations = records(me['organizations']);
         online = true;
         error = '';
         syncedAt = DateTime.now().toUtc();
-        await _write(captured, 'cache_$currentScope', jsonEncode({
-          'at': syncedAt!.toIso8601String(), 'snapshot': snapshot,
-        }));
+        await _write(
+          captured,
+          'cache_$currentScope',
+          jsonEncode({'at': syncedAt!.toIso8601String(), 'snapshot': snapshot}),
+        );
+        await _acknowledgeCommissioning(currentScope);
+        if (captured == _generation) await _loadOutbox();
         return;
       }
       const names = [
@@ -1002,6 +1133,15 @@ class LiftController extends ChangeNotifier {
           : <Json>[];
       if (captured != _generation) return;
       snapshot = next;
+      if (me['can_commissioning'] == false &&
+          _resources.keys.any((path) => path.startsWith('commissioning/'))) {
+        _resources.removeWhere((path, _) => path.startsWith('commissioning/'));
+        await _write(
+          captured,
+          'resources_$currentScope',
+          jsonEncode(_resources),
+        );
+      }
       organizations = records(me['organizations']);
       online = true;
       error = '';
@@ -1034,6 +1174,8 @@ class LiftController extends ChangeNotifier {
           }
         }
       }
+      if (captured != _generation) return;
+      await _acknowledgeCommissioning(currentScope);
       if (captured != _generation) return;
       await _loadOutbox();
       await _saveSession();
@@ -1085,6 +1227,20 @@ class LiftController extends ChangeNotifier {
         notifyListeners();
       }
     }
+  }
+
+  Future<void> _acknowledgeCommissioning(String key) async {
+    var acknowledged = false;
+    for (final row in List<Json>.from(_outboxRows)) {
+      if (row['command']['type'] != 'commissioning' || row['state'] != 'synced')
+        continue;
+      await outbox.acknowledge(key, row['id'] as String);
+      final file = row['file_id'];
+      if (!outbox.nativeSync && file is String)
+        await mediaFiles.remove(key, file);
+      acknowledged = true;
+    }
+    if (acknowledged) syncRevision++;
   }
 
   Future<dynamic> request(
@@ -1165,9 +1321,21 @@ class LiftController extends ChangeNotifier {
   }
 
   Future<void> uploadCommissioningReceipt(
-    int project, int expense, Uint8List bytes, String filename, {
+    int project,
+    int expense,
+    Uint8List bytes,
+    String filename, {
     required int expectedOrganization,
   }) async {
+    if (canRecordCommissioning) {
+      return queueCommissioning(
+        project,
+        'receipt',
+        {'expense': expense},
+        receipt: bytes,
+        expectedOrganization: expectedOrganization,
+      );
+    }
     if (!online || session == null || expectedOrganization != organization) {
       throw const ApiError('Нужна связь с сервером и действующий доступ.');
     }
@@ -1267,16 +1435,76 @@ class LiftController extends ChangeNotifier {
     bool pdf = false,
     bool video = false,
   }) async {
-    if (!canWrite || expectedOrg != organization) {
-      throw const ApiError('Для просмотра файла нужна связь с сервером.');
+    if (session == null ||
+        expectedOrg != organization ||
+        _switchingOrganization) {
+      throw const ApiError('Организация изменилась. Откройте файл заново.');
     }
-    final captured = _generation, api = _api();
-    try {
-      final data = await api.download(path, pdf: pdf, video: video);
+    final captured = _generation, key = scope, api = _api();
+    final uri = api.resourceUri(path);
+    final resource =
+        '${uri.path}|${uri.query}|${pdf
+            ? 'pdf'
+            : video
+            ? 'video'
+            : 'image'}';
+    final useCache = store is DeviceStore && !uri.path.endsWith('/receipt/');
+    void checkScope() {
       if (captured != _generation) {
         throw const ApiError('Сеанс или организация изменились.');
       }
-      return data;
+    }
+
+    try {
+      ({Uint8List bytes, String etag})? saved;
+      if (useCache) {
+        try {
+          saved = await _downloadCache.read(key, resource);
+        } catch (_) {
+          log.record('download_cache_read_failed');
+        }
+      }
+      checkScope();
+      if (!canWrite) {
+        if (saved != null) return saved.bytes;
+        throw const ApiError('Файл ещё не загружен. Подключитесь к интернету.');
+      }
+      try {
+        final file = await api.fetchDownload(
+          path,
+          pdf: pdf,
+          video: video,
+          etag: saved?.etag ?? '',
+        );
+        checkScope();
+        if (file.bytes == null) return saved!.bytes;
+        if (useCache) {
+          try {
+            await _downloadCache.write(
+              key,
+              resource,
+              file.bytes!,
+              file.etag,
+              cacheLimit,
+            );
+          } catch (_) {
+            log.record('download_cache_write_failed');
+          }
+        }
+        checkScope();
+        return file.bytes!;
+      } on ApiError catch (e) {
+        if (useCache && [401, 403, 404].contains(e.status)) {
+          try {
+            await _downloadCache.remove(key, resource);
+          } catch (_) {
+            log.record('download_cache_remove_failed');
+          }
+        }
+        checkScope();
+        if (e.network && saved != null) return saved.bytes;
+        rethrow;
+      }
     } finally {
       api.close();
     }
@@ -1296,9 +1524,13 @@ class LiftController extends ChangeNotifier {
         throw const ApiError('Организация изменилась.');
       }
       if (route == 'chat/') {
-        return queueMedia('chat', files, body: fields['body'] ?? '',
+        return queueMedia(
+          'chat',
+          files,
+          body: fields['body'] ?? '',
           linkedTicket: int.tryParse(fields['linked_ticket'] ?? ''),
-          linkedPart: int.tryParse(fields['linked_part'] ?? ''));
+          linkedPart: int.tryParse(fields['linked_part'] ?? ''),
+        );
       }
       final task = RegExp(r'^tasks/(\d+)/attachments/$').firstMatch(route);
       if (task != null) {
@@ -1367,13 +1599,37 @@ class LiftController extends ChangeNotifier {
   }
 
   Future<void> setDark(bool value) async {
-    dark = value;
+    await setAppearance(value ? 'dark' : 'light');
+  }
+
+  Future<void> setAppearance(String value) async {
+    if (!appearances.contains(value)) return;
+    appearance = value;
     notifyListeners();
-    await _write(_generation, 'theme', value ? 'dark' : 'light');
+    await _write(_generation, 'theme', appearance);
+  }
+
+  Future<void> setCacheLimit(int value) async {
+    if (!cacheLimits.contains(value)) return;
+    cacheLimit = value;
+    notifyListeners();
+    await _write(_generation, 'download_cache_limit', '$value');
+  }
+
+  Future<void> clearDownloadedFiles() async {
+    if (store is DeviceStore && session != null && organization != null) {
+      await _downloadCache.clear(scope);
+      log.record('download_cache_cleared');
+    }
   }
 
   Future<void> _clearAccount() async {
     _stopSelfPush();
+    try {
+      await clearDownloadedFiles();
+    } catch (_) {
+      log.record('download_cache_clear_failed');
+    }
     await outbox.clearAuth();
     try {
       await DeviceBridge.clearPrivateFiles();
@@ -1409,7 +1665,8 @@ class LiftController extends ChangeNotifier {
     await log.flush();
     await store.clear();
     await store.write('server', serverText);
-    await store.write('theme', dark ? 'dark' : 'light');
+    await store.write('theme', appearance);
+    await store.write('download_cache_limit', '$cacheLimit');
   }
 
   Future<bool> logout() async {
@@ -1501,7 +1758,6 @@ class LiftController extends ChangeNotifier {
     }
   }
 
-
   void _stopSelfPush() {
     _selfPushPoller?.stop();
     _selfPushPoller = null;
@@ -1517,7 +1773,9 @@ class LiftController extends ChangeNotifier {
     final user = session!['user'];
     final token = session!['token'];
     final server = session!['server'];
-    if (user is! Map || user['id'] is! int || token is! String ||
+    if (user is! Map ||
+        user['id'] is! int ||
+        token is! String ||
         server is! String) {
       return;
     }
@@ -1613,6 +1871,17 @@ class LiftController extends ChangeNotifier {
       /* Platform bridge unavailable. */
     }
     if (!stillSelected()) return;
+    // Checking the APK catalogue has no Firebase or notification dependency.
+    if (forceUpdates) {
+      unawaited(
+        checkUpdates(force: true).then<void>(
+          (_) {},
+          onError: (Object _) {
+            log.record('update_check_failed');
+          },
+        ),
+      );
+    }
     try {
       final key = 'push_permission_prompted';
       final prompt = await store.read(key) != 'true';
@@ -1621,7 +1890,7 @@ class LiftController extends ChangeNotifier {
     } catch (_) {
       log.record('push_sync_failed');
     }
-    if (!stillSelected()) return;
+    if (!stillSelected() || forceUpdates) return;
     try {
       await checkUpdates(force: forceUpdates);
     } catch (_) {

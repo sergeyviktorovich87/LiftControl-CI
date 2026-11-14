@@ -176,7 +176,15 @@ class OfflineDatabase private constructor(private val context: Context) : SQLite
             if(deleted > 0) db.delete("blobs","k=?",arrayOf("outbox:$scope:$id"))
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
-        completed?.getJSONObject("command")?.takeIf { it.optString("type")=="media" }?.getJSONObject("body")?.optString("file_id")?.takeIf { it.isNotEmpty() }?.let { MediaVault.remove(context,scope,it) }
+        if (completed != null) {
+            val command = completed.getJSONObject("command")
+            val fileId = when (command.optString("type")) {
+                "media" -> command.getJSONObject("body").optString("file_id")
+                "commissioning" -> completed.optString("file_id")
+                else -> ""
+            }
+            if (fileId.isNotEmpty()) MediaVault.remove(context,scope,fileId)
+        }
     }
     /** Returns true only for a transient failure that needs OS retry. */
     fun synchronize(scope: String, stopped: () -> Boolean = { false }): Boolean = synchronized(syncLock) {
@@ -192,14 +200,21 @@ class OfflineDatabase private constructor(private val context: Context) : SQLite
             if (stopped()) return@synchronized true
             val row = pending.getJSONObject(i)
             val command = row.getJSONObject("command")
-            val ticket = command.optLong("ticket", row.optLong("local_id",0))
+            val commissioning = command.optString("type") == "commissioning"
+            val project = if (commissioning) row.getLong("commissioning_project") else 0
+            val ticket = if (commissioning) -2000000000L - project else command.optLong("ticket", row.optLong("local_id",0))
             if (row.getString("state") == "failed") { blocked.add(ticket); continue }
             if (row.getString("state") != "queued" || ticket in blocked) continue
             if (++processed > 50) return@synchronized true
             var connection: HttpURLConnection? = null
             try {
                 val media = command.optString("type")=="media"
-                connection = uri.resolve(if (media) "/api/media/uploads/" else "/api/mobile/sync/").toURL().openConnection() as HttpURLConnection
+                val route = when {
+                    commissioning -> "/api/commissioning/$project/sync/"
+                    media -> "/api/media/uploads/"
+                    else -> "/api/mobile/sync/"
+                }
+                connection = uri.resolve(route).toURL().openConnection() as HttpURLConnection
                 connection.instanceFollowRedirects = false
                 connection.connectTimeout = 20000; connection.readTimeout = 30000
                 connection.requestMethod = "POST"; connection.doOutput = true
@@ -207,8 +222,13 @@ class OfflineDatabase private constructor(private val context: Context) : SQLite
                 connection.setRequestProperty("Accept", "application/json")
                 connection.setRequestProperty("Authorization", "Bearer ${auth.getString("token")}")
                 connection.setRequestProperty("X-Organization-ID", auth.getInt("organization").toString())
-                if (media) MediaVault.writeUpload(context,scope,row,connection) else {
-                    val bytes = command.toString().toByteArray(Charsets.UTF_8)
+                val request = if (commissioning) JSONObject()
+                    .put("id", row.getString("id")).put("type", command.getString("action"))
+                    .put("body", command.getJSONObject("body")) else command
+                if (commissioning && row.has("file_id")) {
+                    MediaVault.writeReceipt(context, scope, row.getString("file_id"), request, connection)
+                } else if (media) MediaVault.writeUpload(context,scope,row,connection) else {
+                    val bytes = request.toString().toByteArray(Charsets.UTF_8)
                     connection.setFixedLengthStreamingMode(bytes.size)
                     connection.outputStream.use { it.write(bytes) }
                 }
@@ -228,7 +248,11 @@ class OfflineDatabase private constructor(private val context: Context) : SQLite
                 if (status in 200..299) {
                     val response = JSONObject(content)
                     require(response.getString("operation_id") == row.getString("id"))
-                    if (media) require(response.optString("state")=="READY" && (!response.isNull("asset") || response.optInt("message")>0)) else require(response.getJSONObject("ticket").getInt("id")>0)
+                    when {
+                        commissioning -> require(response.optJSONObject("result") != null)
+                        media -> require(response.optString("state")=="READY" && (!response.isNull("asset") || response.optInt("message")>0))
+                        else -> require(response.getJSONObject("ticket").getInt("id")>0)
+                    }
                     finish(scope,row.getString("id"),"synced",content)
                     PushState.record(context,"offline_sent")
                 } else {
@@ -279,6 +303,14 @@ class OfflineDatabase private constructor(private val context: Context) : SQLite
                             "mediaStage" -> MediaVault.stage(activity,scope,call.argument<String>("id")!!,call.argument<ByteArray>("bytes")!!)
                             "mediaRead" -> MediaVault.read(activity,scope,call.argument<String>("id")!!)
                             "mediaRemove" -> { MediaVault.remove(activity,scope,call.argument<String>("id")!!); null }
+                            "downloadRead" -> DownloadedMediaCache.read(activity, scope, call.argument<String>("resource")!!)
+                            "downloadWrite" -> {
+                                DownloadedMediaCache.write(activity, scope, call.argument<String>("resource")!!,
+                                    call.argument<ByteArray>("bytes")!!, call.argument<String>("etag")!!, call.argument<Int>("limit")!!)
+                                null
+                            }
+                            "downloadRemove" -> { DownloadedMediaCache.remove(activity, scope, call.argument<String>("resource")!!); null }
+                            "downloadClear" -> { DownloadedMediaCache.clear(activity, scope); null }
                             "read" -> db.read(call.argument<String>("key")!!)
                             "write" -> { db.write(call.argument<String>("key")!!,call.argument<String>("value")!!); null }
                             "delete" -> { db.delete(call.argument<String>("key")!!); null }

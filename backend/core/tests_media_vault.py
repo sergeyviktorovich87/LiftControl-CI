@@ -51,8 +51,12 @@ class MediaVaultTests(TestCase):
         with Image.open(asset.preview) as preview:self.assertLessEqual(max(preview.size),480)
         response=self.client.get(f'/api/media/{asset.pk}/download/',HTTP_RANGE='bytes=0-7')
         self.assertEqual(response.status_code,206);self.assertEqual(b''.join(response.streaming_content),self.raw[:8])
+        tag = response['ETag']
+        self.assertEqual(self.client.get(f'/api/media/{asset.pk}/download/', HTTP_IF_NONE_MATCH=tag).status_code, 304)
+        self.assertEqual(self.client.get(f'/api/media/{asset.pk}/preview/', HTTP_IF_NONE_MATCH=tag).status_code, 200)
         self.client.force_authenticate(None)
         self.assertIn(self.client.get(f'/api/media/{asset.pk}/preview/').status_code,(401,403))
+        self.assertIn(self.client.get(f'/api/media/{asset.pk}/download/', HTTP_IF_NONE_MATCH=tag).status_code,(401,403))
 
     def test_retry_is_idempotent_and_payload_reuse_conflicts(self):
         key=str(uuid.uuid4())

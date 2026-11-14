@@ -12,7 +12,7 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 
-from .access import MemberAccess, org, role, technician_id
+from .access import MemberAccess, org, role, technician_id, commissioning_access
 from .models import Membership, NotificationInbox, CommissioningAssignment, PersonalTask
 
 
@@ -29,13 +29,9 @@ def _enqueue(organization, user_ids, event_type, event_id, kind, title,
 
 
 def enqueue_ticket(event):
+    from .notification_preferences import ticket_recipients
     ticket=event.ticket
-    users=(Membership.objects.filter(
-        organization=ticket.organization,active=True,user__is_active=True)
-        .exclude(role='ADJUSTER')
-        .exclude(role='MECHANIC',technician__isnull=True)
-        .exclude(role='MECHANIC',technician__active=False)
-        .values_list('user_id',flat=True).distinct())
+    users = ticket_recipients(ticket, event.action).values_list('user_id', flat=True)
     _enqueue(ticket.organization,users,'ticket',event.pk,event.action,
              f'Заявка №{ticket.pk}: {event.action}','ticket',ticket.pk)
 
@@ -62,7 +58,8 @@ def enqueue_commissioning_message(message):
     users.update(project.lifts.filter(assignments__active=True,
         assignments__user__is_active=True,
         assignments__user__memberships__organization=project.organization,
-        assignments__user__memberships__active=True).values_list(
+        assignments__user__memberships__active=True,
+        assignments__user__memberships__can_commissioning=True).values_list(
         'assignments__user_id',flat=True))
     users.discard(message.author_id)
     _enqueue(project.organization,users,'commissioning_message',
@@ -92,6 +89,8 @@ def _visible_inbox(user, company):
         user=user, active=True,
         lift__project__organization=company,
     ).values_list('lift__project_id', flat=True)
+    if not commissioning_access(user):
+        rows = rows.exclude(target_type='commissioning')
     if current_role == 'ADJUSTER':
         return rows.filter(target_type='commissioning', target_id__in=projects)
     if current_role in ('ADMIN', 'DIRECTOR', 'DISPATCHER'):

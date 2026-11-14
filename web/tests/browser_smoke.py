@@ -54,7 +54,7 @@ async def field_check(page,name,company,output):
         await page.goto(f'http://127.0.0.1:18081/?organization={company}#settings')
         await expect(page.get_by_text('Категории уведомлений',exact=True)).to_have_count(0)
         if name=='owner-phone':
-            await page.get_by_role('button',name='Тёмная',exact=True).click()
+            await page.get_by_label('Тема оформления', exact=True).select_option('dark')
     await page.get_by_role('button',name='Открыть чат команды',exact=True).click()
     await page.get_by_role('heading',name='Чат команды',exact=True).wait_for()
     await page.get_by_role('textbox',name='Сообщение команде',exact=True).fill('Фото и видео '+name)

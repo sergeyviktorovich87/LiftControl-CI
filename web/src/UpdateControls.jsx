@@ -12,7 +12,7 @@ export default function UpdateControls({user}){
   {user.can_manage_access&&<small>Обновление сервера устанавливает администратор командой из пакета. Перед установкой сохраняется копия базы.</small>}
   {error&&<p className="error" role="alert">{error}</p>}
   <div className="actions"><button disabled={busy} onClick={check}>{busy?'Проверка…':'Проверить обновления'}</button>
-  {release?.android&&<a className="button" href="/api/updates/android/download/">Скачать Android</a>}
+  {release?.android&&<a className="button" href={'/api/updates/android/download/?'+new URLSearchParams({sha256:release.android.sha256,organization:user.organization_id})}>Скачать Android</a>}
   {release?.panel&&<a className="button" href="/api/updates/panel/download/">Скачать пакет сервера</a>}</div>
  </div></div>;
 }

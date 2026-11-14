@@ -112,6 +112,20 @@ class _StaffPageState extends State<StaffPage> {
     }
   }
 
+  Future<void> _commissioningAccess(Json member, bool value) async {
+    try {
+      await c.request(
+        'organizations/members/${member['id']}/',
+        method: 'PATCH',
+        data: {'can_commissioning': value},
+        expectedOrganization: _org,
+      );
+      await _load();
+    } catch (error) {
+      if (mounted) showError(context, error);
+    }
+  }
+
   @override
   Widget build(BuildContext context) => ScopePage(
     controller: c,
@@ -233,6 +247,17 @@ class _StaffPageState extends State<StaffPage> {
                                   ),
                               ],
                             ),
+                          if (manage && member != null)
+                            SwitchListTile(
+                              contentPadding: EdgeInsets.zero,
+                              title: const Text('Пусконаладка'),
+                              value: member['can_commissioning'] == true,
+                              onChanged:
+                                  c.canWrite && member['user'] != c.me['id']
+                                  ? (value) =>
+                                        _commissioningAccess(member, value)
+                                  : null,
+                            ),
                         ],
                       ),
                     );
@@ -245,6 +270,26 @@ class _StaffPageState extends State<StaffPage> {
                   'Сотрудники не найдены',
                   'Измените поиск или включите показ архива.',
                 ),
+              if (manage)
+                for (final member in _members.where(
+                  (m) => m['role'] == 'ADJUSTER' && m['technician'] == null,
+                ))
+                  Padding(
+                    padding: const EdgeInsets.only(top: 12),
+                    child: Sheet(
+                      child: SwitchListTile(
+                        contentPadding: EdgeInsets.zero,
+                        title: Text(text(member, 'name')),
+                        subtitle: const Text(
+                          'Внешний наладчик · доступ к пусконаладке',
+                        ),
+                        value: member['can_commissioning'] == true,
+                        onChanged: c.canWrite
+                            ? (value) => _commissioningAccess(member, value)
+                            : null,
+                      ),
+                    ),
+                  ),
             ],
           ),
         ),

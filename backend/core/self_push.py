@@ -16,6 +16,7 @@ from rest_framework.response import Response
 
 from .access import MemberAccess, membership, org
 from .models import MobileSession, NotificationPreference, PersonalTaskEvent, TicketEvent
+from .notification_preferences import ticket_recipients
 
 TICKET_ACTIONS = ('created', 'accepted', 'completed', 'canceled', 'stopped', 'resumed', 'reassigned')
 TASK_ACTIONS = ('created', 'assigned', 'accepted', 'completed', 'canceled')
@@ -141,6 +142,8 @@ def feed(request):
     events = []
     for row in ticket_rows:
         if row.created_at < recent or not _current_ticket(row, now):
+            continue
+        if not ticket_recipients(row.ticket, row.action).filter(user=request.user).exists():
             continue
         group = _category(row.ticket.priority, row.action)
         if not _allowed(preference, group):

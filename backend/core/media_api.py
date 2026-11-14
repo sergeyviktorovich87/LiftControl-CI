@@ -122,10 +122,19 @@ def download(request, asset_id, variant):
         row = SimpleNamespace(file=asset.preview,size=asset.preview_size,content_type='image/webp')
     else:
         row = asset
+    # Authorization is checked above on every request, including revalidation.
+    etag = '"%s-%s"' % (asset.sha256, variant)
+    if request.headers.get('If-None-Match') == etag and not request.headers.get('Range') and row.file.storage.exists(row.file.name):
+        from django.http import HttpResponseNotModified
+        response = HttpResponseNotModified()
+        response['ETag'] = etag
+        response['Cache-Control'] = 'private, no-store'
+        return response
     try:
         response = serve(row,request)
     except FileNotFoundError:
         raise NotFound('Файл недоступен. Обратитесь к администратору.')
+    response['ETag'] = etag
     if request.query_params.get('download') == '1':
         response['Content-Disposition'] = content_disposition_header(True,asset.original_name)
     return response

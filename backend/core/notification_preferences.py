@@ -2,10 +2,34 @@
 from rest_framework import serializers
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
+from django.db.models import Q
+from django.utils import timezone
 from .access import MemberAccess, org
-from .models import NotificationPreference
+from .models import DutyShift, Membership, NotificationPreference
 
 FIELDS = ('ordinary','urgent','entrapment','updates','tasks')
+NEW_TICKET_EVENTS = ('created', 'reassigned')
+
+
+def ticket_recipients(ticket, kind):
+    members = Membership.objects.filter(
+        organization=ticket.organization, active=True, user__is_active=True,
+    ).exclude(role='ADJUSTER').exclude(
+        role='MECHANIC', technician__isnull=True,
+    ).exclude(role='MECHANIC', technician__active=False)
+    responsible = ticket.assigned_to_id or ticket.elevator.assigned_technician_id
+    eligible = Q(role__in=('ADMIN', 'DIRECTOR', 'DISPATCHER'))
+    if responsible:
+        eligible |= Q(role='MECHANIC', technician_id=responsible)
+    if ticket.priority in ('HIGH', 'EMERGENCY', 'ENTRAPMENT') or not responsible:
+        now = timezone.now()
+        on_duty = DutyShift.objects.filter(
+            organization=ticket.organization, start__lte=now, end__gt=now,
+        ).values('technician_id')
+        eligible |= Q(role='MECHANIC', technician_id__in=on_duty)
+    if kind in NEW_TICKET_EVENTS and responsible and ticket.priority in ('LOW', 'NORMAL'):
+        eligible = Q(role='MECHANIC', technician_id=responsible)
+    return members.filter(eligible)
 
 
 def category(priority, kind='created'):

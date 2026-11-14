@@ -83,9 +83,13 @@ class _LiftAppState extends State<LiftApp> with WidgetsBindingObserver {
       return MaterialApp(
         title: 'LiftControl',
         debugShowCheckedModeBanner: false,
-        theme: liftTheme(false),
-        darkTheme: liftTheme(true),
-        themeMode: c.dark ? ThemeMode.dark : ThemeMode.light,
+        theme: liftTheme(false, appearance: c.appearance),
+        darkTheme: liftTheme(true, appearance: c.appearance),
+        themeMode: c.appearance == 'auto'
+            ? ThemeMode.system
+            : c.dark
+            ? ThemeMode.dark
+            : ThemeMode.light,
         locale: const Locale('ru'),
         supportedLocales: const [Locale('ru'), Locale('en')],
         localizationsDelegates: GlobalMaterialLocalizations.delegates,

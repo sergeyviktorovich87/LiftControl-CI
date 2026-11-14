@@ -1,5 +1,6 @@
 """0.13 maintenance PDF tests: tenant, signed-in access and six-column report."""
-from datetime import timedelta
+from datetime import datetime, timezone as utc_timezone
+from unittest.mock import patch
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.utils import timezone
@@ -55,3 +56,13 @@ class MaintenancePdfTests(TestCase):
         self.assertEqual(self.get(self.admin,{'from':'nonsense'}).status_code,400)
         self.assertEqual(self.get(self.admin,{'from':'2027-02-02','to':'2027-01-01'}).status_code,400)
         self.assertEqual(self.get(self.admin,{'from':'2027-01-01','to':'2027-01-02'}).status_code,200)
+
+    def test_period_uses_local_date_of_organization(self):
+        self.organization.timezone = 'Asia/Chita'
+        self.organization.save(update_fields=['timezone'])
+        self.entry.completed_at = datetime(2026, 11, 13, 15, 30, tzinfo=utc_timezone.utc)
+        self.entry.save(update_fields=['completed_at'])
+        with patch('core.maintenance_pdf._pdf', return_value=b'%PDF-') as render:
+            result = self.get(self.admin, {'from': '2026-11-14', 'to': '2026-11-14'})
+            self.assertEqual(result.status_code, 200)
+            self.assertEqual([row.pk for row in render.call_args.args[1]], [self.entry.pk])

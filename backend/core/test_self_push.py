@@ -49,7 +49,8 @@ class SelfPushFeedTests(TestCase):
 
     def ticket(self, org=None):
         ticket = Ticket.objects.create(
-            organization=org or self.organization, elevator=self.elevator, title='Test', status='NEW'
+            organization=org or self.organization, elevator=self.elevator, title='Test', status='NEW',
+            assigned_to=self.mechanic,
         )
         event = TicketEvent.objects.create(
             organization=org or self.organization, ticket=ticket, action='created', after='NEW'

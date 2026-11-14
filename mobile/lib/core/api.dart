@@ -77,6 +77,7 @@ class ApiClient {
     http.BaseRequest request,
     String route, {
     int limit = 4 * 1024 * 1024,
+    bool allowNotModified = false,
   }) async {
     request.followRedirects =
         false; // Never forward a bearer token to a redirected host.
@@ -106,6 +107,7 @@ class ApiClient {
         status: response.statusCode,
         elapsed: clock.elapsedMilliseconds,
       );
+      if (allowNotModified && response.statusCode == 304) return response;
       if (response.statusCode >= 300 && response.statusCode < 400) {
         throw const ApiError(
           'Сервер перенаправляет запрос. Проверьте адрес HTTPS.',
@@ -213,7 +215,7 @@ class ApiClient {
         uri.userInfo.isNotEmpty ||
         uri.hasFragment ||
         !RegExp(
-          r'^/api/(maintenance/\d+/journal/pdf|tickets/\d+/photos/\d+|documents/\d+/download|(?:chat|tasks)/\d+/attachments/\d+|media/[0-9a-f-]{36}/(?:download|preview))/$',
+          r'^/api/(maintenance/\d+/journal/pdf|tickets/\d+/photos/\d+|documents/\d+/download|(?:chat|tasks)/\d+/attachments/\d+|media/[0-9a-f-]{36}/(?:download|preview)|commissioning/\d+/expenses/\d+/receipt)/$',
         ).hasMatch(uri.path) ||
         (uri.queryParameters['organization'] != null &&
             uri.queryParameters['organization'] != '$organization')) {
@@ -227,12 +229,26 @@ class ApiClient {
     bool pdf = false,
     bool video = false,
   }) async {
+    final file = await fetchDownload(path, pdf: pdf, video: video);
+    return file.bytes!;
+  }
+
+  Future<({Uint8List? bytes, String etag})> fetchDownload(
+    String path, {
+    bool pdf = false,
+    bool video = false,
+    String etag = '',
+  }) async {
     final uri = resourceUri(path);
+    final request = http.Request('GET', uri);
+    if (etag.isNotEmpty) request.headers['If-None-Match'] = etag;
     final response = await _send(
-      http.Request('GET', uri),
+      request,
       uri.path,
       limit: 32 * 1024 * 1024,
+      allowNotModified: etag.isNotEmpty,
     );
+    if (response.statusCode == 304) return (bytes: null, etag: etag);
     final contentType = response.headers['content-type'] ?? '';
     if (pdf
         ? !contentType.startsWith('application/pdf')
@@ -245,6 +261,7 @@ class ApiClient {
         : !contentType.startsWith('image/')) {
       throw const ApiError('Формат файла не поддерживается.');
     }
-    return response.bodyBytes;
+    final tag = response.headers['etag'] ?? '';
+    return (bytes: response.bodyBytes, etag: tag.length > 100 ? '' : tag);
   }
 }

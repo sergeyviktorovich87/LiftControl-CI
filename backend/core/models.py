@@ -201,6 +201,7 @@ class Membership(models.Model):
     role = models.CharField(max_length=20, choices=Role.choices, default=Role.MECHANIC)
     technician = models.OneToOneField(Technician, null=True, blank=True, on_delete=models.SET_NULL)
     active = models.BooleanField(default=True)
+    can_commissioning = models.BooleanField(default=False)
     class Meta:
         constraints = [models.UniqueConstraint(fields=['user', 'organization'], name='unique_user_organization')]
 
@@ -657,6 +658,7 @@ class CommissioningExpense(models.Model):
     description = models.CharField(max_length=1000)
     receipt = models.FileField(upload_to=private_path, blank=True, max_length=250)
     created_at = models.DateTimeField(auto_now_add=True)
+    spent_on = models.DateField(null=True, blank=True)
     reimbursed_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
@@ -700,6 +702,21 @@ class CommissioningMessage(models.Model):
 
     class Meta:
         ordering = ['id']
+
+
+class CommissioningSyncReceipt(models.Model):
+    organization = models.ForeignKey(Organization, on_delete=models.PROTECT)
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
+    operation_id = models.UUIDField()
+    payload_hash = models.CharField(max_length=64)
+    result = models.JSONField()
+    received_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(
+            fields=['organization', 'user', 'operation_id'],
+            name='commissioning_sync_once',
+        )]
 
 
 class CommissioningLiftRequest(models.Model):
