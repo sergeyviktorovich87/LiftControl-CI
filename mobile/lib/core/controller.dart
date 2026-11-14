@@ -1511,9 +1511,23 @@ class LiftController extends ChangeNotifier {
 
   void _startSelfPush() {
     if (!canWrite || organization == null || session == null) return;
+    // Only start when the currently selected organization explicitly supports
+    // this transport. Legacy servers and restricted adjusters must not poll.
+    if (me['self_push_api'] != 1) return;
     final user = session!['user'];
     final token = session!['token'];
-    if (user is! Map || user['id'] is! int || token is! String) return;
+    final server = session!['server'];
+    if (user is! Map || user['id'] is! int || token is! String ||
+        server is! String) {
+      return;
+    }
+    late final Uri endpoint;
+    try {
+      endpoint = parseServer(server);
+    } catch (_) {
+      log.record('self_push_invalid_server');
+      return;
+    }
     final scopeOrg = organization!;
     final generation = _generation;
     if (_selfPushPoller != null &&
@@ -1525,7 +1539,7 @@ class LiftController extends ChangeNotifier {
     _stopSelfPush();
     late final SelfPushPoller poller;
     poller = SelfPushPoller(
-      server: parseServer(serverText),
+      server: endpoint,
       token: token,
       userId: user['id'] as int,
       organization: scopeOrg,

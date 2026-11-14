@@ -51,7 +51,7 @@ def me(request):
             'organizations': available_organizations(request.user), 'commissioning_only': True,
             'can_commissioning': has_commissioning, 'can_manage': False,
             'can_manage_access': False, 'can_create_ticket': False,
-            'field_ops_api': 0, 'offline_sync_api': 0, 'media_api': 0,
+            'field_ops_api': 0, 'offline_sync_api': 0, 'media_api': 0, 'self_push_api': 0,
             'timezone': organization.timezone, 'utc_offset_minutes': int(timezone.now().astimezone(ZoneInfo(organization.timezone)).utcoffset().total_seconds()//60), 'server_time': timezone.now(),
             'csrf': get_token(request),
         })
@@ -60,7 +60,7 @@ def me(request):
     from .organizations import available_organizations
     from .mobile_sync import offline_grant
     return Response({'commissioning_only':False, 'can_commissioning':has_commissioning,
-        'media_api':1,'offline_sync_api':1, 'offline_grant':offline_grant(request.user),
+        'media_api':1,'offline_sync_api':1,'self_push_api':1, 'offline_grant':offline_grant(request.user),
         'on_duty':is_on_duty(request.user),'can_create_ticket':can_create_ticket(request.user),
         'id':request.user.id,'name':request.user.get_full_name() or request.user.username,'role':role(request.user),'field_ops_api':1,
         'organization':organization.name,'organization_id':organization.pk,'organizations':available_organizations(request.user),
