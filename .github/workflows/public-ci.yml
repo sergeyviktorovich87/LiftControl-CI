@@ -1,0 +1,139 @@
+name: LiftControl 0.13 · Public CI (sanitized, no release)
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: liftcontrol-public-ci
+  cancel-in-progress: true
+jobs:
+  verify:
+    name: Verify sanitized source manifest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Reject unexpected source and verify Git object digests
+        run: |
+          python - <<'PY'
+          import hashlib
+          import json
+          import re
+          from pathlib import Path
+
+          metadata = json.loads(Path('PUBLIC_SNAPSHOT_MANIFEST.json').read_text('utf-8'))
+          assert metadata.get('kind') == 'sanitized-test-snapshot'
+          assert metadata.get('integrity_algorithm') == 'git-blob-sha1'
+          expected = metadata['source_files']
+          allowed_roots = ('backend', 'web', 'mobile', 'tests')
+          existing = {
+              path.as_posix() for root in allowed_roots
+              for path in Path(root).rglob('*') if path.is_file()
+          }
+          if set(expected) != existing:
+              raise SystemExit('Unapproved added or missing source file')
+          forbidden = re.compile(
+              r'MegapolisPrivateValueNeverAllowed|'
+              r'Мегаполис|Эверест|Игнатьевск|Воронков|Кантемиров|'
+              r'Андросов|Шатравк|Николаи|50 лет Октября|'
+              r'Благовещенск|Чайка Smart|'
+              r'-----BEGIN [^-]*PRIVATE KEY-----|'
+              r'gh[pousr]_[A-Za-z0-9_]{20,}|'
+              r'github_pat_[A-Za-z0-9_]{20,}',
+              re.I,
+          )
+          count = 0
+          for name, digest in expected.items():
+              content = Path(name).read_bytes()
+              blob = b'blob ' + str(len(content)).encode() + b'\0' + content
+              if hashlib.sha1(blob).hexdigest() != digest:
+                  raise SystemExit('Source digest mismatch: ' + name)
+              if name.endswith(('.py','.dart','.js','.jsx','.kt','.kts','.json','.xml','.yaml','.yml','.html','.css')):
+                  if forbidden.search(content.decode('utf-8')):
+                      raise SystemExit('Sanitization check failed: ' + name)
+              count += 1
+          print('Verified sanitized files:', count)
+          PY
+  backend:
+    name: Django migrations and tests
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      DJANGO_DEBUG: 'True'
+      DJANGO_SECRET_KEY: 'ephemeral-public-ci-only-never-used-in-production'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install nonsecret PDF and media tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ffmpeg fonts-dejavu-core
+      - run: python -m pip install -r backend/requirements.txt
+      - name: Compile Python source
+        run: python -m compileall -q backend
+      - name: Check migration consistency
+        working-directory: backend
+        run: python manage.py makemigrations --check --dry-run core
+      - name: Run Django regression tests
+        working-directory: backend
+        run: |
+          python manage.py migrate --noinput
+          python manage.py test core --verbosity 2
+  web:
+    name: Web React production compilation (not deployment)
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --no-audit --no-fund
+        working-directory: web
+      - run: npm run build -- --base=/static/web/
+        working-directory: web
+  android:
+    name: Flutter analysis, tests, DEBUG compilation only
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      CI: 'true'
+      FLUTTER_SUPPRESS_ANALYTICS: 'true'
+      DART_SUPPRESS_ANALYTICS: 'true'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2
+        with:
+          flutter-version: '3.47.9'
+          cache: true
+      - run: flutter pub get --enforce-lockfile
+        working-directory: mobile
+      - run: flutter analyze --no-pub
+        working-directory: mobile
+      - run: flutter test --no-pub --reporter expanded
+        working-directory: mobile
+      - name: Compile noninstallable DEBUG APK
+        working-directory: mobile
+        run: |
+          python tool/prepare_gradle.py
+          flutter build apk --debug --target-platform android-arm64
+# No secrets, FCM, signing, artifacts, deployments or production access.
