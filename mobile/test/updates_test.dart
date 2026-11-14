@@ -173,7 +173,11 @@ void main() {
       MaterialApp(home: Scaffold(body: MorePage(controller: c))),
     );
     await tester.pumpAndSettle();
-    await tester.ensureVisible(find.byKey(const Key('software-version')));
+    await tester.scrollUntilVisible(
+      find.byKey(const Key('software-version')),
+      220,
+      scrollable: find.byType(Scrollable).first,
+    );
     await tester.pumpAndSettle();
     expect(find.text('Версия ПО'), findsOneWidget);
     expect(find.text('Android 0.12.0 · сборка 2030'), findsOneWidget);

@@ -1594,7 +1594,17 @@ class LiftController extends ChangeNotifier {
   }
 
   Future<void> syncDevice({bool forceUpdates = false}) async {
-    if (!canWrite || organization == null) return;
+    // A stale background sync must never start fresh HTTP requests after the
+    // employee switches organizations or the account changes.
+    final selectedGeneration = _generation;
+    final selectedOrg = organization;
+    bool stillSelected() =>
+        canWrite &&
+        !_switchingOrganization &&
+        !refreshing &&
+        organization == selectedOrg &&
+        selectedGeneration == _generation;
+    if (!stillSelected()) return;
     _startSelfPush();
     try {
       installedVersionCode =
@@ -1602,13 +1612,16 @@ class LiftController extends ChangeNotifier {
     } catch (_) {
       /* Platform bridge unavailable. */
     }
+    if (!stillSelected()) return;
     try {
       final key = 'push_permission_prompted';
       final prompt = await store.read(key) != 'true';
+      if (!stillSelected()) return;
       await enablePush(prompt: prompt);
     } catch (_) {
       log.record('push_sync_failed');
     }
+    if (!stillSelected()) return;
     try {
       await checkUpdates(force: forceUpdates);
     } catch (_) {
